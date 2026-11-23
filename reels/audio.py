@@ -5,13 +5,15 @@ import sys, wave
 import numpy as np
 
 SR = 48000
-DUR = 15.0
+INS0, D = 9.85, 2.2   # sıcak su sahnesi (görüntüyle aynı ekleme)
+DUR = 15.0 + D
 N = int(SR * DUR)
 t = np.arange(N) / SR
 rng = np.random.default_rng(7)
 L = np.zeros(N); Rr = np.zeros(N)
 
-def add(sig, start, pan=0.0, gain=1.0):
+def add(sig, start, pan=0.0, gain=1.0, raw=False):
+    if not raw and start >= INS0: start += D
     i0 = int(start * SR)
     if i0 >= N: return
     sig = sig[: N - i0] * gain
@@ -46,14 +48,17 @@ def bandnoise(dur, f0, f1, q=2.0):
 def note(f): return 440.0 * 2 ** ((f - 69) / 12)
 
 # ---------- pad (akorlar) ----------
-chords = [  # (başlangıç, bitiş, midi notaları)
+chords = [  # hikâye zamanı (başlangıç, bitiş, midi notaları) — arpej için
     (0.0, 5.05, [38, 50, 57, 64, 65, 72]),     # Dm9 — merak
     (5.05, 7.6, [34, 46, 53, 57, 62, 69]),     # Bbmaj7 — sıcak
-    (7.6, 10.4, [43, 55, 58, 62, 65, 69]),     # Gm9 — serin
-    (10.4, 12.88, [45, 57, 62, 64, 69, 71]),   # Asus — gerilim
+    (7.6, 9.85, [43, 55, 58, 62, 65, 69]),     # Gm9 — serin
+    (9.85, 12.88, [45, 57, 62, 64, 69, 71]),   # Asus — gerilim
     (12.88, 15.0, [38, 50, 57, 62, 66, 69, 76]),  # D(add9) — çözülme / logo
 ]
-for (a, b, notes) in chords:
+WCH = [41, 53, 57, 60, 64, 67]                 # Fmaj9 — sıcak su
+pads = [(0.0, 5.05, chords[0][2]), (5.05, 7.6, chords[1][2]), (7.6, INS0, chords[2][2]),
+        (INS0, INS0 + D, WCH), (INS0 + D, 12.88 + D, chords[3][2]), (12.88 + D, DUR, chords[4][2])]
+for (a, b, notes) in pads:
     dur = b - a + 0.6
     n = int(dur * SR); tt = np.arange(n) / SR
     sig = np.zeros(n)
@@ -65,10 +70,10 @@ for (a, b, notes) in chords:
             saw = 2 * ((ff * tt + ph / (2 * np.pi)) % 1) - 1
             sig += (0.55 * saw + 0.45 * np.sin(2 * np.pi * ff * tt + ph)) / (1 + 0.15 * k)
     cutoff = 900 + 700 * np.sin(np.pi * np.clip(tt / dur, 0, 1))
-    if a >= 12.88: cutoff = 1800 + 1500 * np.exp(-tt * 1.5)
+    if a >= 12.88 + D: cutoff = 1800 + 1500 * np.exp(-tt * 1.5)
     sig = onepole_lp(onepole_lp(sig, cutoff), cutoff)
     sig *= env_adsr(n, 0.25 if a > 0 else 0.05, 0.3, 0.85, 0.6) / len(notes)
-    add(sig, a, pan=0.0, gain=0.55 if a < 12.88 else 0.7)
+    add(sig, a, pan=0.0, gain=0.55 if a < 12.88 + D else 0.7, raw=True)
 
 # ---------- arpej (tempo hissi) ----------
 step = 0.25
@@ -84,7 +89,12 @@ while s0 + k * step < 12.6:
     if 9.9 < st < 10.9: vel *= 0.35
     add(pl, st, pan=0.45 if k % 2 else -0.45, gain=0.10 * vel)
     k += 1
-
+# sıcak su sahnesi arpeji
+for j in range(int(D / step)):
+    st = INS0 + j * step; m = WCH[2:][(j * 3) % 4] + 12
+    f = note(m); n = int(0.45 * SR); tt = np.arange(n) / SR
+    pl = (np.sin(2 * np.pi * f * tt) + 0.3 * np.sin(2 * np.pi * 2 * f * tt)) * np.exp(-tt * 9)
+    add(pl, st, pan=0.45 if j % 2 else -0.45, gain=0.10 * (0.5 + 0.5 * (j % 4 == 0)), raw=True)
 # ---------- sub vuruşlar ----------
 def boom(f0=55, dec=2.2, dur=2.0, click=0.3):
     n = int(dur * SR); tt = np.arange(n) / SR
@@ -140,6 +150,20 @@ for i, m in enumerate([74, 76, 78, 81]):
 for m, d in [(78, 0.0), (81, 0.04), (86, 0.08)]:
     add(bell(note(m), 2.0), 13.4 + d, gain=0.13)
 add(bell(note(90), 1.6), 14.3, gain=0.06)
+
+# su: whoosh, damla "plip", sıçrama, kabarcıklar, buhar
+w = bandnoise(0.6, 400, 6000); add(w * np.sin(np.pi * np.linspace(0, 1, len(w))) ** 1.5, INS0 - 0.25, pan=0.5, gain=0.45, raw=True)
+n = int(0.25 * SR); tt = np.arange(n) / SR
+add(np.sin(2 * np.pi * np.cumsum(700 + 1800 * (tt / 0.25) ** 0.5) / SR) * np.exp(-tt * 18), INS0 + 0.5, gain=0.35, raw=True)
+add(boom(60, dec=4, dur=1.0, click=0.15), INS0 + 0.5, gain=0.35, raw=True)
+sp = bandnoise(0.5, 6000, 1500, 2); add(sp * np.exp(-np.linspace(0, 6, len(sp))), INS0 + 0.5, gain=0.3, raw=True)
+for i in range(28):
+    st = INS0 + 0.6 + rng.uniform(0, 1.3); n = int(0.08 * SR); tt = np.arange(n) / SR
+    f0 = rng.uniform(500, 1400)
+    add(np.sin(2 * np.pi * np.cumsum(f0 * (1 + 3 * tt / 0.08)) / SR) * np.exp(-tt * 50), st, pan=rng.uniform(-.6, .6), gain=0.06, raw=True)
+stm = bandnoise(1.4, 3000, 1200, 1.2); add(stm * np.sin(np.pi * np.linspace(0, 1, len(stm))), INS0 + 0.9, gain=0.12, raw=True)
+w = bandnoise(0.55, 500, 6000); add(w * np.sin(np.pi * np.linspace(0, 1, len(w))) ** 1.5, INS0 + 1.65, pan=-0.5, gain=0.4, raw=True)
+
 
 # ---------- reverb (gürültü tepkisi ile konvolüsyon) ----------
 def reverb(x, seconds=2.6, seed=1):

@@ -17,7 +17,10 @@
    Tamamen prosedürel; her kare renderFrame(i) ile deterministik çizilir.
    ?play=1 ile tarayıcıda gerçek zamanlı önizleme yapılır.
    ===================================================================== */
-const W = 1080, H = 1920, FPS = 30, DUR = 15, NF = FPS * DUR, TAU = Math.PI * 2;
+const W = 1080, H = 1920, FPS = 30, TAU = Math.PI * 2;
+// Sıcak su sahnesi, hikâye zamanında 9.85 sn'ye INSD süreli olarak eklenir
+const INS0 = 9.85, INSD = 2.2, DUR = 15 + INSD, NF = Math.round(FPS * DUR);
+const storyT = T => T < INS0 ? T : (T < INS0 + INSD ? null : T - INSD);
 const cv = document.getElementById('c'), out = cv.getContext('2d');
 const sc = document.createElement('canvas'); sc.width = W; sc.height = H;
 const ctx = sc.getContext('2d');
@@ -72,7 +75,7 @@ const K = [
 const CAMKEYS = ['tx', 'ty', 'tz', 'd', 'yaw', 'pitch', 'roll', 'cy'];
 
 let CAM = {};
-function setCam(t) {
+function camAt(t) {
   let i = 0; while (i < K.length - 2 && t > K[i + 1].t) i++;
   const a = K[i], b = K[i + 1];
   const p = E[b.e](inv(a.t, b.t, t));
@@ -80,6 +83,10 @@ function setCam(t) {
   // el kamerası hissi: çok hafif nefes
   c.yaw += 0.007 * Math.sin(t * 1.3) + 0.003 * Math.sin(t * 3.1);
   c.pitch += 0.005 * Math.sin(t * 0.9 + 1);
+  return c;
+}
+function setCam(t) { applyCam(camAt(t)); }
+function applyCam(c) {
   CAM = { ...c, f: 1500, cx: 540, cyw: Math.cos(c.yaw), syw: Math.sin(c.yaw), cp: Math.cos(c.pitch), sp: Math.sin(c.pitch), cr: Math.cos(c.roll), sr: Math.sin(c.roll) };
   CAM.pos = [c.tx + c.d * Math.sin(c.yaw) * Math.cos(c.pitch), c.ty + c.d * Math.sin(c.pitch), c.tz + c.d * Math.cos(c.yaw) * Math.cos(c.pitch)];
 }
@@ -105,14 +112,14 @@ function fanSpeed(t) {
   s += 38 * E.in3(inv(12.0, 12.9, t));
   return s;
 }
-const ROT = new Float64Array(NF * 8 + 80);
+const ROT = new Float64Array(FPS * 16 * 8 + 80);
 (function () { let a = 0; const dt = 1 / (FPS * 8); for (let i = 0; i < ROT.length; i++) { ROT[i] = a; a += fanSpeed(i * dt) * dt; } })();
-const rotAt = t => { const x = clamp(t, 0, DUR + 1) * FPS * 8; const i = Math.floor(x); return lerp(ROT[i], ROT[i + 1] || ROT[i], x - i); };
+const rotAt = t => { const x = clamp(t, 0, 15.5) * FPS * 8; const i = Math.floor(x); return lerp(ROT[i], ROT[i + 1] || ROT[i], x - i); };
 
 /* ---------- mod (ısıtma / soğutma) ---------- */
 function modeAt(t) {
   const heat = inv(5.0, 5.35, t) * (1 - inv(7.5, 7.75, t));
-  const cool = inv(7.6, 7.85, t) * (1 - inv(9.8, 10.3, t));
+  const cool = inv(7.6, 7.85, t) * (1 - inv(9.45, 9.85, t));
   let acc = mixC(TURQ, WARM, heat); acc = mixC(acc, ICE, cool * 0.75);
   return { heat, cool, acc };
 }
@@ -561,7 +568,7 @@ function drawDust(c, t, m) {
 }
 
 /* ---------- sahne (hareket bulanıklığı için alt örneklerle) ---------- */
-function drawScene(c, t) {
+function drawScene(c, t, rotOff = 0) {
   setCam(t);
   const m = modeAt(t);
   c.globalCompositeOperation = 'source-over'; c.globalAlpha = 1; c.filter = 'none';
@@ -569,7 +576,7 @@ function drawScene(c, t) {
   drawBackground(c, t, m);
   drawDust(c, t, m);
   drawFloor(c, t, m);
-  drawUnit(c, t, m, rotAt(t));
+  drawUnit(c, t, m, rotAt(t) + rotOff);
   drawInflow(c, t, m);
   drawHeat(c, t, m);
   drawCool(c, t, m);
@@ -822,22 +829,173 @@ function post(c, t, frame) {
   c.restore();
 }
 
+/* ---------- SICAK SU (boyler) sahnesi ---------- */
+const TX = 0.98, TZ = -0.12, TR = 0.21, TH = 1.12;
+const BUB = Array.from({ length: 40 }, () => ({ x: R(), s: R(), sp: 0.6 + R() * 0.9, r: 1.5 + R() * 3.5 }));
+const warmAt = u => E.inOut3(inv(0.7, 1.7, u));
+function waterMode(u) { const w = warmAt(u); return { heat: 0, cool: 0, w, acc: mixC(TURQ, WARM, w * 0.85) }; }
+function waterCam(u) {
+  const c0 = camAt(INS0);
+  const c1 = { tx: 0.30, ty: 0.14, tz: 0, d: 3.05, yaw: -0.13, pitch: 0.12, roll: 0, cy: 1180 };
+  const p = E.inOut3(inv(0, 0.75, u)) * (1 - E.inOut3(inv(1.62, 2.2, u)));
+  const c = {}; for (const k of CAMKEYS) c[k] = lerp(c0[k], c1[k], p);
+  c.yaw += 0.025 * Math.sin(Math.PI * inv(0.6, 1.8, u)) ;
+  applyCam(c);
+}
+function cylPts(y) { // tankın bir yüksekliğindeki elips: merkez, rx, ry
+  const c0 = P(TX, y, TZ), a = P(TX + TR, y, TZ), b = P(TX, y, TZ + TR);
+  return { x: c0[0], y: c0[1], rx: Math.hypot(a[0] - c0[0], a[1] - c0[1]), ry: Math.abs(b[1] - c0[1]) + 0.5 };
+}
+function drawTank(c, u, m) {
+  const app = E.out3(inv(0.05, 0.55, u));
+  if (app <= 0) return;
+  const y0 = FLOOR + 0.02, y1 = FLOOR + TH * lerp(0.6, 1, app);
+  const B = cylPts(y0), T = cylPts(y1);
+  c.save(); c.globalAlpha = app;
+  // gölge
+  c.save(); c.translate(B.x, B.y); c.scale(B.rx * 1.6, B.ry * 1.6 + 4);
+  const sg = c.createRadialGradient(0, 0, 0, 0, 0, 1); sg.addColorStop(0, 'rgba(0,0,0,0.6)'); sg.addColorStop(1, 'rgba(0,0,0,0)');
+  c.fillStyle = sg; c.beginPath(); c.arc(0, 0, 1, 0, TAU); c.fill(); c.restore();
+  // gövde
+  const body = () => { c.beginPath(); c.moveTo(T.x - T.rx, T.y); c.lineTo(B.x - B.rx, B.y); c.ellipse(B.x, B.y, B.rx, B.ry, 0, Math.PI, 0, true); c.lineTo(T.x + T.rx, T.y); c.ellipse(T.x, T.y, T.rx, T.ry, 0, 0, Math.PI, true); c.closePath(); };
+  const g = c.createLinearGradient(B.x - B.rx, 0, B.x + B.rx, 0);
+  g.addColorStop(0, '#5a6a86'); g.addColorStop(0.28, '#f2f6fb'); g.addColorStop(0.55, '#d4dce8'); g.addColorStop(0.85, '#6d7d99'); g.addColorStop(1, '#2a3a58');
+  body(); c.fillStyle = g; c.fill();
+  // kenar ışığı
+  c.save(); c.globalCompositeOperation = 'lighter';
+  c.strokeStyle = rgba(m.acc, 0.6); c.lineWidth = 2;
+  c.beginPath(); c.moveTo(T.x + T.rx, T.y); c.lineTo(B.x + B.rx, B.y); c.stroke();
+  c.strokeStyle = rgba(m.acc, 0.18); c.lineWidth = 9; c.stroke();
+  c.restore();
+  // üst kapak
+  const tg = c.createLinearGradient(T.x - T.rx, T.y - T.ry, T.x + T.rx, T.y + T.ry);
+  tg.addColorStop(0, '#ffffff'); tg.addColorStop(1, '#aebbd0');
+  c.beginPath(); c.ellipse(T.x, T.y, T.rx, T.ry, 0, 0, TAU); c.fillStyle = tg; c.fill();
+  // cam pencere (su seviyesi)
+  const H0 = lerp(B.y, T.y, 0.12), H1 = lerp(B.y, T.y, 0.84), wx = lerp(B.x, T.x, 0.5) - B.rx * 0.08, ww = B.rx * 0.42;
+  const wpath = () => { c.beginPath(); c.roundRect(wx - ww / 2, H1, ww, H0 - H1, ww / 2); };
+  wpath(); c.fillStyle = '#06122a'; c.fill();
+  c.save(); wpath(); c.clip();
+  const lvl = E.inOut3(inv(0.5, 1.45, u));
+  const wy = lerp(H0 + 10, H1 + 14, lvl);
+  const wc = mixC([40, 120, 255], WARM, m.w);
+  const wg = c.createLinearGradient(0, wy, 0, H0);
+  wg.addColorStop(0, rgba(mixC(wc, WHITE, .35), 0.95)); wg.addColorStop(1, rgba(mixC(wc, [10, 30, 80], .4), 0.95));
+  c.beginPath(); c.moveTo(wx - ww, H0 + 20);
+  for (let k = 0; k <= 20; k++) { const x = wx - ww / 2 + ww * k / 20; c.lineTo(x, wy + Math.sin(k * 0.9 + u * 14) * 4 * (1 - lvl * 0.5)); }
+  c.lineTo(wx + ww, H0 + 20); c.closePath(); c.fillStyle = wg; c.fill();
+  c.globalCompositeOperation = 'lighter';
+  for (const b of BUB) { // kabarcıklar
+    const ph = (u * b.sp + b.s) % 1, y = lerp(H0, wy, ph), x = wx - ww / 2 + ww * (0.15 + 0.7 * b.x) + Math.sin(ph * 9 + b.s * 6) * 4;
+    if (y < wy) continue;
+    c.strokeStyle = `rgba(255,255,255,${0.5 * Math.sin(Math.PI * ph)})`; c.lineWidth = 1.2; c.beginPath(); c.arc(x, y, b.r, 0, TAU); c.stroke();
+  }
+  const gg = c.createRadialGradient(wx, wy, 0, wx, wy, ww * 1.5); gg.addColorStop(0, rgba(wc, 0.5 * lvl)); gg.addColorStop(1, rgba(wc, 0));
+  c.fillStyle = gg; c.fillRect(wx - ww, H1, ww * 2, H0 - H1);
+  // cam yansıması
+  c.globalCompositeOperation = 'source-over'; c.fillStyle = 'rgba(255,255,255,0.12)'; c.fillRect(wx - ww / 2 + ww * 0.15, H1, ww * 0.12, H0 - H1);
+  c.restore();
+  wpath(); c.strokeStyle = 'rgba(255,255,255,0.7)'; c.lineWidth = 2; c.stroke();
+  // turkuaz/sıcak LED halkası
+  const Rg = cylPts(lerp(y0, y1, 0.92));
+  c.save(); c.globalCompositeOperation = 'lighter';
+  for (const [lw, al] of [[10, 0.2], [2.5, 1]]) { c.strokeStyle = rgba(al > .5 ? mixC(m.acc, WHITE, .4) : m.acc, al); c.lineWidth = lw; c.beginPath(); c.ellipse(Rg.x, Rg.y, Rg.rx, Rg.ry, 0, 0, Math.PI); c.stroke(); }
+  c.restore();
+  c.restore();
+  return T;
+}
+function drawPipe(c, u, m) {
+  const a = inv(0.35, 0.7, u); if (a <= 0) return;
+  const pts = [[UW / 2, -0.24, 0.05], [0.66, -0.24, 0.05], [0.66, -0.24, TZ], [TX - TR * 0.9, -0.24, TZ]].map(p => P(...p));
+  c.save(); c.globalCompositeOperation = 'lighter'; c.lineCap = 'round'; c.lineJoin = 'round';
+  const path = () => { c.beginPath(); pts.forEach((p, i) => i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1])); };
+  path(); c.strokeStyle = 'rgba(200,215,235,0.5)'; c.lineWidth = 9 * a; c.stroke();
+  path(); c.strokeStyle = rgba(m.acc, 0.25 * a); c.lineWidth = 22; c.stroke();
+  path(); c.setLineDash([18, 26]); c.lineDashOffset = -u * 220; c.strokeStyle = rgba(mixC(m.acc, WHITE, .5), a); c.lineWidth = 4; c.stroke();
+  c.restore();
+}
+function drawWaterFX(c, u, m, T) {
+  if (!T) return;
+  c.save(); c.globalCompositeOperation = 'lighter';
+  // damla düşer
+  if (u < 0.62) {
+    const p = E.in3(inv(0.0, 0.5, u)), x = T.x, y = lerp(-120, T.y, p), s = 26;
+    if (u < 0.5) {
+      const g = c.createLinearGradient(x - s, y - s * 2, x + s, y + s);
+      g.addColorStop(0, '#ffffff'); g.addColorStop(1, rgba(TURQ));
+      c.beginPath(); c.moveTo(x, y - s * 2.2); c.bezierCurveTo(x + s * .3, y - s * 1.2, x + s, y - s * .4, x + s, y + s * .2); c.bezierCurveTo(x + s, y + s * .8, x + s * .5, y + s * 1.1, x, y + s * 1.1); c.bezierCurveTo(x - s * .5, y + s * 1.1, x - s, y + s * .8, x - s, y + s * .2); c.bezierCurveTo(x - s, y - s * .4, x - s * .3, y - s * 1.2, x, y - s * 2.2);
+      c.fillStyle = g; c.fill();
+      c.strokeStyle = rgba(TURQ, 0.35); c.lineWidth = 6; c.beginPath(); c.moveTo(x, y - s * 2.4); c.lineTo(x, y - s * 2.4 - 260 * p); c.stroke();
+      flare(c, x, y, 90, TURQ, 0.5);
+    }
+  }
+  // çarpma: dalga halkaları
+  for (let i = 0; i < 3; i++) {
+    const p = inv(0.5 + i * 0.12, 1.3 + i * 0.12, u); if (p <= 0 || p >= 1) continue;
+    c.strokeStyle = rgba(mixC(TURQ, WHITE, .4), (1 - p) * 0.9); c.lineWidth = 3 * (1 - p) + 1;
+    c.beginPath(); c.ellipse(T.x, T.y, T.rx * (0.2 + 2.6 * E.out3(p)), T.ry * (0.2 + 2.6 * E.out3(p)), 0, 0, TAU); c.stroke();
+  }
+  const fl = u > 0.5 ? Math.exp(-(u - 0.5) * 9) : 0;
+  if (fl > 0.01) flare(c, T.x, T.y, 260, TURQ, fl);
+  // buhar
+  const st = m.w;
+  if (st > 0.01) for (let j = 0; j < 6; j++) {
+    const g = c.createLinearGradient(0, T.y, 0, T.y - 520);
+    g.addColorStop(0, `rgba(255,240,225,0)`); g.addColorStop(0.2, `rgba(255,240,225,${0.35 * st})`); g.addColorStop(1, 'rgba(255,240,225,0)');
+    c.strokeStyle = g; c.lineCap = 'round';
+    for (const lw of [18, 3]) {
+      c.lineWidth = lw; c.globalAlpha = lw > 10 ? 0.25 : 0.8; c.beginPath();
+      for (let k = 0; k <= 30; k++) { const s = k / 30; const x = T.x + (j - 2.5) * T.rx * 0.28 + Math.sin(s * 6 - u * 4 + j * 1.9) * 22 * (0.3 + s); const y = T.y - 8 - s * 520 * E.out3(st); k ? c.lineTo(x, y) : c.moveTo(x, y); }
+      c.stroke();
+    }
+  }
+  c.restore();
+}
+function drawWaterScene(c, u) {
+  waterCam(u);
+  const m = waterMode(u);
+  c.globalCompositeOperation = 'source-over'; c.globalAlpha = 1; c.filter = 'none';
+  drawBackground(c, 0, { heat: 0.35 * m.w, cool: 0, acc: m.acc });
+  drawDust(c, INS0 + u, m);
+  drawFloor(c, INS0, m);
+  const T = drawTank(c, u, m);
+  drawPipe(c, u, m);
+  drawUnit(c, INS0, m, rotAt(INS0) + 8.5 * u);
+  drawWaterFX(c, u, m, T);
+}
+function drawWaterOverlay(c, u) {
+  const m = waterMode(u);
+  const a = win(u, 0.45, 2.15, 0.35, 0.3);
+  if (a <= 0) return;
+  const v = Math.round(lerp(15, 55, warmAt(u)));
+  const g = c.createLinearGradient(0, 220, 0, 470);
+  g.addColorStop(0, '#ffffff'); g.addColorStop(1, rgba(mixC(TURQ, WARM, m.w)));
+  txt(c, v + '°', 540 + 18, 470, { size: 300, weight: 200, spacing: -6, color: g, alpha: a, blur: (1 - inv(0.45, 0.75, u)) * 20 });
+  txt(c, 'Sıcak su.', 540, 575, { size: 62, weight: 500, color: '#fff', alpha: a * inv(0.6, 0.9, u), blur: (1 - inv(0.6, 0.9, u)) * 10 });
+}
+
 /* ---------- kare üretimi ---------- */
 const FAST = [[2.15, 3.45], [4.85, 5.4], [7.5, 8.05], [12.0, 12.9]];
+const FAST_OUT = [[INS0, INS0 + 0.75], [INS0 + 1.6, INS0 + INSD]];
+function sceneAt(c, T) {
+  const t = storyT(T);
+  if (t === null) drawWaterScene(c, T - INS0);
+  else drawScene(c, t, T >= INS0 ? 8.5 * INSD : 0);
+}
 function renderFrame(i) {
-  const t = i / FPS;
-  const fast = FAST.some(([a, b]) => t > a && t < b);
+  const T = i / FPS, t = storyT(T);
+  const fast = (t !== null && FAST.some(([a, b]) => t > a && t < b)) || FAST_OUT.some(([a, b]) => T > a && T < b);
   const n = fast ? 8 : 4, shutter = (fast ? 1.0 : 0.5) / FPS;
   out.globalCompositeOperation = 'source-over'; out.filter = 'none';
   for (let k = 0; k < n; k++) {
-    const tk = Math.max(0, t + shutter * (k / (n - 1) - 0.5));
-    drawScene(ctx, tk);
+    const tk = Math.max(0, T + shutter * (k / (n - 1) - 0.5));
+    sceneAt(ctx, tk);
     out.globalAlpha = 1 / (k + 1);
     out.drawImage(sc, 0, 0);
   }
   out.globalAlpha = 1;
-  drawOverlay(out, t);
-  post(out, t, i);
+  if (t === null) { drawWaterOverlay(out, T - INS0); post(out, INS0 - 0.001, i); }
+  else { drawOverlay(out, t); post(out, t, i); }
 }
 window.renderFrame = renderFrame;
 window.NF = NF;
