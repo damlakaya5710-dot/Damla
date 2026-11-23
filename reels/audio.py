@@ -5,7 +5,7 @@ import sys, wave
 import numpy as np
 
 SR = 48000
-INS0, D = 9.85, 2.2   # sıcak su sahnesi (görüntüyle aynı ekleme)
+INS0, D = 9.85, 3.6   # sıcak su sahnesi (görüntüyle aynı ekleme)
 DUR = 15.0 + D
 N = int(SR * DUR)
 t = np.arange(N) / SR
@@ -162,7 +162,11 @@ for i in range(28):
     f0 = rng.uniform(500, 1400)
     add(np.sin(2 * np.pi * np.cumsum(f0 * (1 + 3 * tt / 0.08)) / SR) * np.exp(-tt * 50), st, pan=rng.uniform(-.6, .6), gain=0.06, raw=True)
 stm = bandnoise(1.4, 3000, 1200, 1.2); add(stm * np.sin(np.pi * np.linspace(0, 1, len(stm))), INS0 + 0.9, gain=0.12, raw=True)
-w = bandnoise(0.55, 500, 6000); add(w * np.sin(np.pi * np.linspace(0, 1, len(w))) ** 1.5, INS0 + 1.65, pan=-0.5, gain=0.4, raw=True)
+w = bandnoise(0.45, 300, 7000); add(w * np.linspace(0, 1, len(w)) ** 2, INS0 + 1.05, gain=0.5, raw=True)   # tanka dalış
+shw = bandnoise(1.9, 2600, 2600, 4) * 0.7 + bandnoise(1.9, 900, 900, 3) * 0.3                              # duş suyu
+e = np.minimum(1, np.linspace(0, 1.9, len(shw)) / 0.15) * np.minimum(1, (1.9 - np.linspace(0, 1.9, len(shw))) / 0.2)
+add(shw * e, INS0 + 1.45, gain=0.22, raw=True); add(shw[::-1] * e, INS0 + 1.45, pan=0.6, gain=0.12, raw=True)
+w = bandnoise(0.55, 500, 6000); add(w * np.sin(np.pi * np.linspace(0, 1, len(w))) ** 1.5, INS0 + 3.0, pan=-0.5, gain=0.4, raw=True)
 
 
 # ---------- reverb (gürültü tepkisi ile konvolüsyon) ----------
