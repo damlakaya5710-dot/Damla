@@ -86,8 +86,8 @@ while True:
     tb = (np.pi / 2) / 5.7 + k * per - 0.05
     k += 1
     if tb > 12.7: break
-    if tb < 0.7: continue
-    amp = min(1, (tb - 0.7) / 1.5) * (1 - 0.65 * np.clip((tb - 8.6) / 0.4, 0, 1)) * (1 - np.clip((tb - 11.5) / 1.2, 0, 1))
+    if tb < 1.7: continue
+    amp = min(1, (tb - 1.7) / 1.2) * (1 - 0.65 * np.clip((tb - 8.6) / 0.4, 0, 1)) * (1 - np.clip((tb - 11.5) / 1.2, 0, 1))
     add(thump(52, g=1.0), tb, gain=0.55 * amp)
     add(thump(60, g=0.6), tb + 0.24, gain=0.55 * amp)
 

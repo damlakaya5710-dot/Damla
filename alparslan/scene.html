@@ -33,9 +33,11 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 /* ---------------- marka ayarları (buradan değiştirilebilir) ---------------- */
 const BRAND = {
-  name: 'ALPARSLAN',
-  tagline: 'BÜTÜNCÜL BAKIŞ · KALICI ÇÖZÜM',   // ← kendi sloganınızla değiştirin
-  handle: '',                                  // ör. '@alparslan' (boş bırakılırsa çizilmez)
+  title: 'FİZYOTERAPİST',
+  name: 'ALPARSLAN ERİŞTİ',
+  lines: [[['Osteopati', 600], ['  |  Manuel Terapi', 400]], [['Psikonöroimmünoloji  |  Klinik Pilates', 400]]],
+  handle: '',                                  // ör. '@alparslaneristi' (boş bırakılırsa çizilmez)
+  cream: '#f1eee7', green: '35,47,31', sage: '143,163,132',
 };
 
 const W = 1080, H = 1920, FPS = 30, DUR = 19, NF = FPS * DUR;
@@ -105,14 +107,14 @@ const dust = (() => {
 const PAIN = V(0.185, 1.415, 0.0);
 const skinU = {
   uT: { value: 0 }, uA: { value: 0 }, uPain: { value: PAIN }, uPainI: { value: 0 }, uPainR: { value: .12 },
-  uWave: { value: 0 }, uWaveC: { value: V(0, 0, 0) }
+  uWave: { value: 0 }, uWaveC: { value: V(0, 0, 0) }, uScan: { value: -1 }
 };
 const skinMat = new THREE.ShaderMaterial({
   uniforms: skinU, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
   vertexShader: `varying vec3 vN; varying vec3 vV; varying vec3 vW;
     void main(){ vec4 w=modelMatrix*vec4(position,1.); vW=w.xyz; vN=normalize(mat3(modelMatrix)*normal);
       vV=normalize(cameraPosition-w.xyz); gl_Position=projectionMatrix*viewMatrix*w; }`,
-  fragmentShader: `uniform float uT,uA,uPainI,uPainR,uWave; uniform vec3 uPain,uWaveC;
+  fragmentShader: `uniform float uT,uA,uPainI,uPainR,uWave,uScan; uniform vec3 uPain,uWaveC;
     varying vec3 vN; varying vec3 vV; varying vec3 vW;
     void main(){
       float f=pow(1.-abs(dot(normalize(vN),vV)),2.4);
@@ -127,6 +129,8 @@ const skinMat = new THREE.ShaderMaterial({
       // bütünlük dalgası: merkezden tüm bedene yayılan ışık halkası
       float wd=distance(vW,uWaveC);
       c+=vec3(.5,.8,1.)*smoothstep(.06,0.,abs(wd-uWave))*step(.001,uWave)*(f*.6+.1)*.6;
+      c*=smoothstep(uScan+.01,uScan-.03,vW.y);
+      c+=vec3(.55,.88,1.)*smoothstep(.012,0.,abs(vW.y-uScan))*(f*.8+.25);   // tarama halkası
       gl_FragColor=vec4(c*uA,1.);
     }`
 });
@@ -148,7 +152,7 @@ function limb(a, b, ra, rb, mat = skinMat, seg = 28) {           // a→b arası
   addSkin(g, V(0, 0, -.03), V(1, 1, .64));
 }
 addSkin(new THREE.CylinderGeometry(.047, .056, .14, 32, 1, true), V(0, 1.53, -.02));               // boyun
-addSkin(new THREE.SphereGeometry(.1, 48, 32), V(0, 1.675, .0), V(.86, 1.12, 1));                    // baş
+const headSkin = addSkin(new THREE.SphereGeometry(.1, 48, 32), V(0, 1.665, .0), V(.86, 1.18, 1.02));                    // baş
 const SH = [V(.19, 1.405, -.02), V(-.19, 1.405, -.02)], EL = [V(.245, 1.12, -.02), V(-.245, 1.12, -.02)],
       WR = [V(.285, .86, .03), V(-.285, .86, .03)], HP = [V(.095, .9, -.02), V(-.095, .9, -.02)],
       KN = [V(.1, .5, 0), V(-.1, .5, 0)], AN = [V(.1, .085, -.02), V(-.1, .085, -.02)];
@@ -156,69 +160,252 @@ for (let s = 0; s < 2; s++) {
   addSkin(new THREE.SphereGeometry(.058, 32, 24), SH[s].clone().add(V(s ? -.008 : .008, -.01, 0)), V(1, 1.05, .95)); // deltoid
   body.add(limb(SH[s].clone().add(V(0, -.03, 0)), EL[s], .05, .038));
   body.add(limb(EL[s], WR[s], .037, .026));
-  addSkin(new THREE.SphereGeometry(.03, 24, 16), WR[s].clone().add(V(s ? -.008 : .008, -.055, .005)), V(.65, 1.5, 1.05)); // el
+  addSkin(new THREE.SphereGeometry(.03, 24, 16), WR[s].clone().add(V(s ? -.008 : .008, -.06, .005)), V(.68, 1.95, 1.1)); // el
   body.add(limb(HP[s], KN[s], .078, .05));
   body.add(limb(KN[s], AN[s], .05, .032));
   addSkin(new THREE.SphereGeometry(.04, 24, 16), V(s ? -.1 : .1, .035, .04), V(.8, .55, 2.0));   // ayak
 }
 
 /* =====================================================================
-   2) İSKELET: kemikler (fildişi, hafif parlak)
+   2) İSKELET: anatomik kemikler
+      - kemikler ayaktan başa yükselen bir tarama çizgisiyle belirir
+      - kaburga kafesi nefes alır, baş ağrıdan hafifçe uzaklaşır
+      - osteopatik vurgu: yakın planda omuz kuşağı + torakal omurga,
+        geniş planda leğen, sakrum, ayaklar, kafatası ve çene yanar
    ===================================================================== */
-const boneMat = new THREE.MeshPhysicalMaterial({ color: 0xf4efe4, roughness: .42, metalness: 0, clearcoat: .4, clearcoatRoughness: .5, sheen: .6, sheenColor: new THREE.Color(0x9fc8ff), emissive: 0x24221e, transparent: true, opacity: 0 });
+const boneU = { uScan: { value: -1 }, uT: { value: 0 } };
+const boneTex = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 256; const x = c.getContext('2d');
+  x.fillStyle = '#808080'; x.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 2600; i++) {
+    x.fillStyle = rnd() < .5 ? 'rgba(255,255,255,.12)' : 'rgba(0,0,0,.14)';
+    x.beginPath(); x.arc(rnd() * 256, rnd() * 256, .6 + rnd() * 2.6, 0, Math.PI * 2); x.fill();
+  }
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(3, 3); return t;
+})();
+const boneMats = [];
+function makeBoneMat(opts = {}, k = 1) {
+  const m = new THREE.MeshPhysicalMaterial({
+    color: 0xf2eadb, roughness: .46, metalness: 0, clearcoat: .35, clearcoatRoughness: .45, sheen: .5,
+    sheenColor: new THREE.Color(0x9fc8ff), emissive: 0x1c1914, bumpMap: boneTex, bumpScale: .5,
+    transparent: true, opacity: 0, side: THREE.DoubleSide, ...opts
+  });
+  m.userData.hi = { value: 0 };
+  m.onBeforeCompile = sh => {
+    sh.uniforms.uScan = boneU.uScan; sh.uniforms.uT = boneU.uT; sh.uniforms.uHi = m.userData.hi;
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWP;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWP=(modelMatrix*vec4(transformed,1.)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vWP; uniform float uScan,uHi,uT;')
+      .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\nif(vWP.y>uScan) discard;')
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        float fr=pow(1.-abs(dot(normal,normalize(vViewPosition))),2.5);
+        totalEmissiveRadiance+=vec3(.35,.6,1.)*fr*.3;                                        // soğuk kenar ışığı
+        totalEmissiveRadiance+=vec3(.55,.85,1.)*smoothstep(.04,0.,uScan-vWP.y)*3.;            // tarama çizgisi
+        totalEmissiveRadiance+=vec3(1.,.62,.3)*uHi*(.06+.5*fr)*(.75+.25*sin(uT*4.+vWP.y*30.)); // osteopatik vurgu`);
+  };
+  boneMats.push({ m, k }); return m;
+}
+const boneMat = makeBoneMat();
+const hiA = makeBoneMat(), hiB = makeBoneMat();                        // vurgulanan kemik grupları
+const cartMat = makeBoneMat({ color: 0x9cc8ff, emissive: 0x0e2236, roughness: .3, bumpMap: null }, .55);   // kıkırdak / disk
+const darkMat = makeBoneMat({ color: 0x050607, emissive: 0x000000, roughness: .9, sheen: 0, clearcoat: 0, bumpMap: null });
+
 const skel = new THREE.Group(); scene.add(skel);
-const bone = (a, b, r, rb = r) => { const m = limb(a, b, r, rb, boneMat, 14); m.geometry = new THREE.CylinderGeometry(rb, r, a.distanceTo(b), 14); skel.add(m); return m; };
-const knob = (p, r, s) => { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 18, 12), boneMat); m.position.copy(p); if (s) m.scale.copy(s); skel.add(m); return m; };
-const tubeBone = (pts, r) => { const c = new THREE.CatmullRomCurve3(pts); const m = new THREE.Mesh(new THREE.TubeGeometry(c, 40, r, 8), boneMat); skel.add(m); return m; };
-// omurga
-const SPINE = new THREE.CatmullRomCurve3([V(0, .97, -.065), V(0, 1.07, -.05), V(0, 1.2, -.085), V(0, 1.32, -.09), V(0, 1.43, -.06), V(0, 1.51, -.03), V(0, 1.6, -.025)]);
-for (let i = 0; i < 24; i++) {
-  const u = i / 23, p = SPINE.getPointAt(u), cerv = u > .7;
-  const v = new THREE.Mesh(new THREE.CylinderGeometry(cerv ? .013 : .019, cerv ? .013 : .019, cerv ? .012 : .017, 14), boneMat);
-  v.position.copy(p); skel.add(v);
-  const sp = new THREE.Mesh(new THREE.BoxGeometry(.008, .01, cerv ? .025 : .035), boneMat);
-  sp.position.copy(p).add(V(0, -.004, cerv ? -.022 : -.03)); sp.rotation.x = .5; skel.add(sp);
-  const tp = new THREE.Mesh(new THREE.BoxGeometry(cerv ? .05 : .065, .006, .008), boneMat); tp.position.copy(p).add(V(0, 0, -.012)); skel.add(tp);
+// pivotlu alt gruplar: baş (eğilme) ve göğüs kafesi (nefes)
+function pivot(parent, p) { const o = new THREE.Group(); o.position.copy(p); parent.add(o); const i = new THREE.Group(); i.position.copy(p).multiplyScalar(-1); o.add(i); return { o, i }; }
+const headP = pivot(skel, V(0, 1.6, -.025));
+const ribP = pivot(skel, V(0, 1.26, -.09));
+
+function put(m, parent = skel) { parent.add(m); return m; }
+function orient(m, a, b) { m.position.copy(a); m.quaternion.setFromUnitVectors(V(0, 1, 0), b.clone().sub(a).normalize()); return m; }
+// uzun kemik: ince gövde + şişkin uçlar (epifiz), lathe profili
+function longBone(a, b, r, { e0 = .8, e1 = .8, w = .1, mat = boneMat, seg = 16, parent = skel } = {}) {
+  const len = a.distanceTo(b), pts = [], n = 28;
+  for (let i = 0; i <= n; i++) {
+    const u = i / n;
+    let rr = r * (1 + e0 * Math.exp(-(((u - .04) / w) ** 2)) + e1 * Math.exp(-(((.96 - u) / w) ** 2)));
+    rr *= Math.sin(Math.min(1, Math.min(u, 1 - u) / .045) * Math.PI / 2);
+    pts.push(new THREE.Vector2(Math.max(rr, 1e-5), u * len));
+  }
+  return put(orient(new THREE.Mesh(new THREE.LatheGeometry(pts, seg), mat), a, b), parent);
 }
-// kafatası + çene
-knob(V(0, 1.69, -.005), .082, V(.92, 1.0, 1.08));
-tubeBone([V(-.05, 1.63, -.005), V(-.04, 1.59, .04), V(0, 1.58, .062), V(.04, 1.59, .04), V(.05, 1.63, -.005)], .0065);
-// kaburgalar + sternum
-for (let k = 0; k < 10; k++) {
-  const y = 1.37 - k * .026, a = .085 + .055 * Math.sin(Math.PI * (k + 2) / 13);
-  for (const s of [1, -1]) tubeBone([V(s * .015, y, -.09), V(s * a * .75, y - .004, -.105), V(s * a, y - .02, -.025), V(s * a * .82, y - .045, .055), V(s * .03, y - .07, .08)], .0055);
+function ball(p, r, s, mat = boneMat, parent = skel) { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 14), mat); m.position.copy(p); if (s) m.scale.copy(s); return put(m, parent); }
+function tube(pts, r, mat = boneMat, parent = skel, closed = false) {
+  const c = new THREE.CatmullRomCurve3(pts, closed, 'centripetal');
+  return put(new THREE.Mesh(new THREE.TubeGeometry(c, Math.max(20, Math.round(c.getLength() * 300)), r, 10, closed), mat), parent);
 }
-bone(V(0, 1.39, .085), V(0, 1.18, .09), .012, .009);
-// köprücük, kürek kemiği, kol
-for (const s of [1, -1]) {
-  tubeBone([V(s * .02, 1.405, .07), V(s * .09, 1.425, .065), V(s * .175, 1.43, .0)], .007);
-  const sh = new THREE.Shape(); sh.moveTo(0, 0); sh.lineTo(.075 * 1, .035); sh.lineTo(.06, -.02); sh.lineTo(.015, -.16); sh.lineTo(-.01, -.05); sh.closePath();
-  const sg = new THREE.ExtrudeGeometry(sh, { depth: .006, bevelEnabled: true, bevelThickness: .003, bevelSize: .004, bevelSegments: 2 });
-  const sc = new THREE.Mesh(sg, boneMat); sc.position.set(s * .085, 1.39, -.115); sc.scale.x = s; sc.rotation.y = s * .45; skel.add(sc);
-  knob(SH[s < 0 ? 1 : 0].clone().add(V(-s * .012, -.012, 0)), .024);
-  bone(SH[s < 0 ? 1 : 0].clone().add(V(-s * .01, -.03, 0)), EL[s < 0 ? 1 : 0], .012, .01);
-  const e = EL[s < 0 ? 1 : 0], w = WR[s < 0 ? 1 : 0];
-  bone(e.clone().add(V(s * .01, 0, -.008)), w.clone().add(V(s * .008, 0, -.006)), .007, .006);
-  bone(e.clone().add(V(-s * .008, 0, .008)), w.clone().add(V(-s * .006, 0, .008)), .006, .008);
-  for (let f = 0; f < 4; f++) bone(w.clone().add(V(s * (.012 - f * .008), -.03, .005 + f * .004)), w.clone().add(V(s * (.014 - f * .01), -.1 + Math.abs(f - 1.5) * .01, .01 + f * .005)), .003);
-}
-// leğen
+
+/* ---------- kafatası ---------- */
 {
-  const pel = new THREE.Mesh(new THREE.TorusGeometry(.085, .022, 12, 40), boneMat);
-  pel.position.set(0, .94, -.02); pel.rotation.x = Math.PI / 2 - .35; pel.scale.set(1.25, 1, .8); skel.add(pel);
-  knob(V(0, .93, -.075), .03, V(1, 1.4, .6));
-  for (const s of [1, -1]) knob(V(s * .1, .99, -.02), .045, V(1, 1.1, .35));
+  const H_ = headP.i;
+  const g = new THREE.SphereGeometry(1, 56, 40), p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    let x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    if (y < -.4) y = -.4 + (y + .4) * .6;                             // kafa tabanı
+    x *= .072 * (1 - .07 * Math.exp(-(((y + .05) / .3) ** 2)));           // şakak çukuru
+    z *= z < 0 ? .094 : .088; y *= .08;
+    p.setXYZ(i, x, y, z);
+  }
+  g.computeVertexNormals();
+  const cr = new THREE.Mesh(g, hiB); cr.position.set(0, 1.705, -.012); H_.add(cr);
+  // yüz: üst çene + elmacık
+  ball(V(0, 1.646, .036), 1, V(.05, .042, .045), boneMat, H_);
+  tube([V(-.046, 1.692, .062), V(-.02, 1.7, .076), V(0, 1.697, .079), V(.02, 1.7, .076), V(.046, 1.692, .062)], .0075, boneMat, H_);   // kaş kemeri
+  for (const s of [1, -1]) {
+    ball(V(s * .026, 1.668, .068), 1, V(.0185, .016, .012), darkMat, H_);                                    // göz çukuru
+    tube([V(s * .045, 1.672, .062), V(s * .05, 1.655, .06), V(s * .042, 1.646, .066), V(s * .026, 1.648, .074)], .004, boneMat, H_); // orbita alt kenarı
+    tube([V(s * .045, 1.65, .055), V(s * .062, 1.652, .028), V(s * .068, 1.652, .0)], .005, boneMat, H_);    // elmacık kemeri
+    ball(V(s * .066, 1.646, -.01), .007, null, hiB, H_);                                                     // çene eklemi (TME)
+  }
+  ball(V(0, 1.639, .08), 1, V(.0075, .012, .006), darkMat, H_);                                              // burun açıklığı
+  // dişler
+  for (const [yy, rz] of [[1.614, .036], [1.603, .033]])
+    for (let k = 0; k < 14; k++) {
+      const a = -1.15 + k * 2.3 / 13;
+      const m = new THREE.Mesh(new THREE.BoxGeometry(.0045, .008, .004), boneMat);
+      m.position.set(Math.sin(a) * .026, yy, .03 + Math.cos(a) * rz * .95); m.rotation.y = a; H_.add(m);
+    }
+  // alt çene
+  tube([V(-.064, 1.648, -.008), V(-.058, 1.605, -.004), V(-.04, 1.588, .036), V(-.016, 1.58, .058), V(0, 1.578, .063),
+        V(.016, 1.58, .058), V(.04, 1.588, .036), V(.058, 1.605, -.004), V(.064, 1.648, -.008)], .0075, hiB, H_);
 }
-// bacaklar
-for (let s = 0; s < 2; s++) {
-  const sg = s ? -1 : 1;
-  knob(HP[s].clone().add(V(-sg * .01, .0, 0)), .022);
-  bone(HP[s].clone().add(V(sg * .01, -.02, 0)), KN[s].clone().add(V(0, .015, 0)), .014, .016);
-  knob(KN[s].clone().add(V(0, 0, .035)), .017, V(1, 1.2, .6));
-  bone(KN[s].clone().add(V(0, -.015, 0)), AN[s], .015, .011);
-  bone(KN[s].clone().add(V(sg * .02, -.03, -.01)), AN[s].clone().add(V(sg * .02, 0, -.01)), .006);
-  for (let f = 0; f < 5; f++) bone(AN[s].clone().add(V(sg * (.0 - f * .01) + sg * .02, -.03, .0)), V(sg * (.12 - f * .012), .01, .11 - Math.abs(f - 1) * .008), .0045);
+
+/* ---------- omurga (24 omur + diskler) ---------- */
+const SPINE = new THREE.CatmullRomCurve3([V(0, .97, -.065), V(0, 1.07, -.05), V(0, 1.2, -.085), V(0, 1.32, -.09), V(0, 1.43, -.06), V(0, 1.53, -.03), V(0, 1.615, -.025)]);
+const vert = [];
+for (let i = 0; i < 24; i++) {          // i: 0 = L5 … 4 = L1, 5 = T12 … 16 = T1, 17 = C7 … 23 = C1
+  const u = (i + .5) / 24, p = SPINE.getPointAt(u), tg = SPINE.getTangentAt(u);
+  const reg = i < 5 ? 'L' : i < 17 ? 'T' : 'C';
+  const r = reg === 'L' ? .021 : reg === 'T' ? .0145 + (16 - i) * .0004 : .0115, h = reg === 'L' ? .019 : reg === 'T' ? .016 : .011;
+  const mat = (i >= 11 && i <= 19) ? hiA : (i <= 1 ? hiB : boneMat);   // T6–C5 yakın plan, L4–L5 geniş plan
+  const grp = new THREE.Group(); grp.position.copy(p); grp.quaternion.setFromUnitVectors(V(0, 1, 0), tg); skel.add(grp);
+  const prof = [[0, -h / 2], [r * .93, -h / 2], [r, -h * .35], [r * .88, 0], [r, h * .35], [r * .93, h / 2], [0, h / 2]].map(([a, b]) => new THREE.Vector2(a, b));
+  grp.add(new THREE.Mesh(new THREE.LatheGeometry(prof, 18), mat));
+  const arch = new THREE.Mesh(new THREE.TorusGeometry(r * .62, r * .2, 6, 14, Math.PI), mat);
+  arch.rotation.x = -Math.PI / 2; arch.position.z = -r * .85; grp.add(arch);
+  const spL = reg === 'L' ? .028 : reg === 'T' ? .034 : .018;
+  const sp = new THREE.Mesh(new THREE.CylinderGeometry(.0025, .005, spL, 6), mat);
+  sp.position.set(0, reg === 'T' ? -.008 : -.002, -r * 1.45 - spL * .4); sp.rotation.x = reg === 'T' ? -1.0 : reg === 'L' ? -1.45 : -1.25; grp.add(sp);
+  for (const s of [1, -1]) {
+    const tpL = reg === 'L' ? .03 : reg === 'T' ? .026 : .02;
+    const tp = new THREE.Mesh(new THREE.CylinderGeometry(.0022, .0038, tpL, 6), mat);
+    tp.position.set(s * (r * .55 + tpL / 2), 0, -r * 1.05); tp.rotation.z = s * Math.PI / 2; tp.rotation.y = reg === 'T' ? -s * .5 : 0; grp.add(tp);
+  }
+  vert.push({ p, r, h });
 }
+for (let i = 0; i < 23; i++) {         // omurlar arası diskler
+  const a = vert[i], b = vert[i + 1], m = a.p.clone().add(b.p).multiplyScalar(.5);
+  const gap = Math.max(.003, a.p.distanceTo(b.p) - (a.h + b.h) / 2);
+  const d = new THREE.Mesh(new THREE.CylinderGeometry(Math.min(a.r, b.r) * .92, Math.min(a.r, b.r) * .92, gap, 16), cartMat);
+  orient(d, m, b.p).position.copy(m); skel.add(d);
+}
+const spineZ = y => { let best = 0, bd = 9; for (let u = 0; u <= 1; u += .01) { const p = SPINE.getPointAt(u); const d = Math.abs(p.y - y); if (d < bd) { bd = d; best = p.z; } } return best; };
+
+/* ---------- göğüs kafesi (12 çift kaburga, kıkırdak, sternum) ---------- */
+{
+  const R_ = ribP.i;
+  for (let k = 0; k < 12; k++) {
+    const y = 1.388 - k * .0245, zs = spineZ(y);
+    const a = .058 + .068 * Math.sin(Math.PI * Math.min(1, (k + 1.2) / 12.5)) * (k > 9 ? .92 : 1);
+    const fy = y - .052 - k * .002, mat = k <= 2 ? null : boneMat;
+    for (const s of [1, -1]) {
+      const m = (k <= 2 && s === 1) ? hiA : boneMat;
+      if (k < 10) {
+        tube([V(s * .012, y, zs - .004), V(s * a * .5, y + .003, zs - .032), V(s * a * .93, y - .012, zs + .004), V(s * a, y - .028, .02), V(s * a * .72, fy + .006, .068)], .0048 + k * .0001, m, R_);
+        const st = k < 7 ? V(s * .014, 1.378 - k * .027, .089) : V(s * (.03 + (k - 7) * .012), 1.185 - (k - 7) * .006, .084);
+        tube([V(s * a * .72, fy + .006, .068), V(s * (a * .4 + .01), (fy + st.y) / 2 - .004, .084), st], .0042, cartMat, R_);
+      } else {
+        tube([V(s * .012, y, zs - .004), V(s * a * .5, y + .002, zs - .03), V(s * a * .92, y - .014, zs + .004), V(s * a * .86, y - .032, .025)], .0045, m, R_);
+      }
+    }
+  }
+  ball(V(0, 1.372, .087), 1, V(.022, .021, .0075), boneMat, R_);     // manubrium
+  ball(V(0, 1.285, .092), 1, V(.0155, .068, .0065), boneMat, R_);    // sternum gövdesi
+  ball(V(0, 1.207, .089), 1, V(.007, .014, .004), boneMat, R_);      // ksifoid
+}
+
+/* ---------- omuz kuşağı + kollar + eller ---------- */
+const SHB = [V(.188, 1.392, -.025), V(-.188, 1.392, -.025)];
+function hand(s, w, parent) {
+  for (let c = 0; c < 7; c++) ball(w.clone().add(V(-s * .004 * (c % 2), -.008 - .0065 * Math.floor(c / 3), -.009 + .009 * (c % 3))), .0052, null, boneMat, parent);
+  for (let f = 0; f < 4; f++) {
+    let p0 = w.clone().add(V(-s * .002, -.024, -.0115 + f * .0077));
+    const dir = V(-s * .04, -1, (f - 1.5) * .07).normalize();
+    const lens = [.04, .025, .016, .012].map(l => l * (f === 0 ? .82 : f === 3 ? .95 : 1));
+    lens.forEach((L, j) => {
+      const p1 = p0.clone().add(dir.clone().multiplyScalar(L));
+      longBone(p0, p1, j ? .0023 - j * .0003 : .0027, { e0: .55, e1: .7, w: .16, seg: 8, parent });
+      p0 = p1.clone().add(dir.clone().multiplyScalar(.0016)); dir.add(V(-s * .14, 0, 0)).normalize();
+    });
+  }
+  let p0 = w.clone().add(V(-s * .004, -.014, .015)); const dir = V(-s * .25, -1, .6).normalize();
+  for (const L of [.03, .021, .016]) { const p1 = p0.clone().add(dir.clone().multiplyScalar(L)); longBone(p0, p1, .0027, { e0: .5, e1: .7, w: .16, seg: 8, parent }); p0 = p1.clone().add(dir.clone().multiplyScalar(.0016)); dir.add(V(-s * .12, 0, .04)).normalize(); }
+}
+for (let si = 0; si < 2; si++) {
+  const s = si ? -1 : 1, A = si === 0 ? hiA : boneMat;               // sağ omuz kuşağı yakın planda vurgulanır
+  tube([V(s * .014, 1.395, .086), V(s * .06, 1.41, .08), V(s * .12, 1.426, .05), V(s * .172, 1.432, .0)], .0066, A);      // köprücük
+  // kürek kemiği
+  const sh = new THREE.Shape();
+  sh.moveTo(0, 0); sh.quadraticCurveTo(.03, .012, .058, .006); sh.lineTo(.072, -.022); sh.quadraticCurveTo(.052, -.08, .022, -.152);
+  sh.quadraticCurveTo(.008, -.14, -.004, -.1); sh.quadraticCurveTo(-.006, -.04, 0, 0);
+  const sc = new THREE.Mesh(new THREE.ExtrudeGeometry(sh, { depth: .004, bevelEnabled: true, bevelThickness: .002, bevelSize: .003, bevelSegments: 2, curveSegments: 16 }), A);
+  sc.position.set(s * .068, 1.398, -.122); sc.scale.x = s; sc.rotation.y = s * .5; skel.add(sc);
+  tube([V(s * .072, 1.37, -.13), V(s * .11, 1.39, -.118), V(s * .15, 1.412, -.085), V(s * .174, 1.428, -.035)], .005, A);   // spina skapula
+  ball(V(s * .176, 1.43, -.022), 1, V(.016, .007, .02), A);                                                              // akromiyon
+  tube([V(s * .148, 1.41, -.03), V(s * .152, 1.405, .0), V(s * .148, 1.398, .02)], .0045, A);                             // korakoid
+  // kol
+  ball(SHB[si], .022, null, A);
+  const E = EL[si], Wr = WR[si];
+  longBone(SHB[si].clone().add(V(s * .006, -.015, 0)), E.clone().add(V(0, .006, 0)), .0082, { e0: 1.0, e1: 1.5, mat: A });
+  longBone(E.clone().add(V(s * .009, .01, -.012)), Wr.clone().add(V(s * .011, .002, -.007)), .0052, { e0: 1.5, e1: .6 });   // ulna
+  longBone(E.clone().add(V(-s * .006, -.006, .006)), Wr.clone().add(V(-s * .007, .002, .008)), .0048, { e0: .6, e1: 1.6 }); // radius
+  hand(s, Wr, skel);
+}
+
+/* ---------- leğen kemiği + sakrum ---------- */
+{
+  const sh = new THREE.Shape(); sh.moveTo(-.036, 0); sh.quadraticCurveTo(0, .008, .036, 0); sh.lineTo(.009, -.072); sh.quadraticCurveTo(0, -.078, -.009, -.072); sh.closePath();
+  const sa = new THREE.Mesh(new THREE.ExtrudeGeometry(sh, { depth: .012, bevelEnabled: true, bevelThickness: .004, bevelSize: .004, bevelSegments: 3 }), hiB);
+  sa.position.set(0, 1.0, -.085); sa.rotation.x = -.55; skel.add(sa);
+  tube([V(0, .938, -.06), V(0, .925, -.05), V(0, .918, -.04)], .004, hiB);                         // koksiks
+  for (const s of [1, -1]) {
+    const g = new THREE.SphereGeometry(.082, 28, 16, s > 0 ? Math.PI - .95 : -.75, 1.7, .55, 1.0);
+    const w = new THREE.Mesh(g, hiB); w.position.set(s * .034, .93, -.012); w.scale.set(1, 1.25, .9); skel.add(w);   // iliak kanat
+    const rim = [];
+    for (let k = 0; k <= 12; k++) {
+      const ph = (s > 0 ? Math.PI - .95 : -.75) + 1.7 * k / 12, th = .55;
+      rim.push(V(-Math.cos(ph) * Math.sin(th) * .082 + s * .034, Math.cos(th) * .082 * 1.25 + .93, Math.sin(ph) * Math.sin(th) * .082 * .9 - .012));
+    }
+    tube(rim, .0042, hiB);                                                                           // iliak krista
+    tube([V(s * .03, .985, -.08), V(s * .05, .975, -.07), V(s * .066, .965, -.05)], .0075, hiB);     // sakroiliak eklem
+    const ac = new THREE.Mesh(new THREE.TorusGeometry(.017, .0048, 8, 20), hiB); ac.position.set(s * .084, .905, -.004); ac.rotation.y = Math.PI / 2; skel.add(ac);
+    tube([V(s * .078, .892, .01), V(s * .042, .876, .046), V(s * .008, .87, .05), V(s * .03, .846, .036), V(s * .058, .835, -.01), V(s * .08, .868, -.02)], .0062, hiB, skel, true);   // pubis–iskium halkası
+  }
+}
+
+/* ---------- bacaklar + ayaklar ---------- */
+for (let si = 0; si < 2; si++) {
+  const s = si ? -1 : 1, K = KN[si], A_ = AN[si];
+  ball(V(s * .084, .905, -.004), .02, null, hiB);                                                   // femur başı
+  longBone(V(s * .086, .903, -.006), V(s * .118, .884, -.014), .0085, { e0: .2, e1: .5, mat: hiB });   // femur boynu
+  ball(V(s * .123, .888, -.02), .012, V(1, 1.2, 1), hiB);                                           // büyük trokanter
+  longBone(V(s * .118, .885, -.016), K.clone().add(V(0, .012, 0)), .0102, { e0: .35, e1: 1.6, w: .08 });
+  ball(V(s * .1, .505, .034), 1, V(.015, .019, .008), boneMat);                                     // patella
+  longBone(K.clone().add(V(0, -.008, 0)), A_.clone().add(V(-s * .004, 0, .004)), .0095, { e0: 1.7, e1: .9, w: .08 });     // tibia
+  longBone(K.clone().add(V(s * .022, -.022, -.012)), A_.clone().add(V(s * .022, -.006, -.008)), .0042, { e0: 1.0, e1: 1.1 }); // fibula
+  // ayak
+  ball(V(s * .1, .066, -.016), 1, V(.015, .012, .018), hiB);                                        // talus
+  ball(V(s * .1, .042, -.042), 1, V(.015, .017, .028), hiB);                                        // kalkaneus
+  for (let c = 0; c < 4; c++) ball(V(s * (.088 + c * .008), .05 - c * .003, .012 + (c % 2) * .006), .0072, null, hiB);
+  for (let f = 0; f < 5; f++) {
+    const b0 = V(s * (.084 + f * .0075), .045 - f * .003, .02), b1 = V(s * (.08 + f * .0125), .02, .082 - f * .007);
+    longBone(b0, b1, .0042, { e0: .6, e1: .9, seg: 10, mat: hiB });
+    let p0 = b1.clone().add(V(0, -.002, .004));
+    for (let j = 0; j < (f ? 3 : 2); j++) { const p1 = p0.clone().add(V(0, -.002, f ? .011 : .015)); longBone(p0, p1, .0032 - j * .0004, { e0: .5, e1: .6, seg: 8, mat: hiB }); p0 = p1.clone().add(V(0, 0, .002)); }
+  }
+}
+
+headP.i.add(headSkin);   // deri baş da iskeletle birlikte eğilir
 
 /* =====================================================================
    3) BAĞLANTILAR: kas lifleri, sinirler, fasyal hatlar
@@ -357,7 +544,7 @@ function camAt(t) {
 const out = document.getElementById('out'), ctx = out.getContext('2d');
 const grain = document.createElement('canvas'); grain.width = grain.height = 256;
 { const g = grain.getContext('2d'), id = g.createImageData(256, 256); for (let i = 0; i < id.data.length; i += 4) { const v = rnd() * 255; id.data[i] = id.data[i + 1] = id.data[i + 2] = v; id.data[i + 3] = 255; } g.putImageData(id, 0, 0); }
-function text(str, x, y, size, a, { weight = 300, font = 'Inter Display', track = 0, color = '255,255,255', blur = 0, dy = 0 } = {}) {
+function text(str, x, y, size, a, { weight = 300, font = 'Inter Display', track = 0, color = '255,255,255', blur = 0, dy = 0, shadow = true, maxW = 980 } = {}) {
   if (a <= 0.001) return;
   ctx.save();
   ctx.font = `${weight} ${size}px "${font}", Inter, sans-serif`;
@@ -365,8 +552,14 @@ function text(str, x, y, size, a, { weight = 300, font = 'Inter Display', track 
   if ('letterSpacing' in ctx) ctx.letterSpacing = track + 'px';
   ctx.globalAlpha = a; ctx.fillStyle = `rgb(${color})`;
   if (blur > 0) ctx.filter = `blur(${blur}px)`;
-  ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 30;
-  ctx.fillText(str, x, y + dy); ctx.restore();
+  if (shadow) { ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 30; }
+  const parts = Array.isArray(str) ? str : [[str, weight]];
+  const fnt = w => `${w} ${size}px "${font}", Inter, sans-serif`;
+  let tot = 0; const ws = parts.map(([s_, w]) => { ctx.font = fnt(w); const m = ctx.measureText(s_).width; tot += m; return m; });
+  const k = Math.min(1, maxW / tot); ctx.translate(x, y + dy); ctx.scale(k, k);
+  ctx.textAlign = 'left'; let cx = -tot / 2;
+  parts.forEach(([s_, w], i) => { ctx.font = fnt(w); ctx.fillText(s_, cx, 0); cx += ws[i]; });
+  ctx.restore();
 }
 // harf harf açılan yazı (sinematik)
 function textReveal(str, x, y, size, t0, t1, tOut, t, opt = {}) {
@@ -388,39 +581,50 @@ function overlay(t) {
   if (blk > 0) { ctx.fillStyle = `rgba(0,0,0,${blk})`; ctx.fillRect(0, 0, W, H); }
 
   // --- yazılar (minimum) ---
-  textReveal('Ağrı burada.', W / 2, H * .82, 64, 1.1, 1.9, 2.9, t, { weight: 300, track: 2 });
+  textReveal('Ağrı burada.', W / 2, H * .82, 64, 1.9, 2.6, 3.3, t, { weight: 300, track: 2 });
   textReveal('Peki ya kaynağı?', W / 2, H * .82, 64, 5.3, 6.1, 7.7, t, { weight: 300, track: 2 });
+  // osteopatik bakış (geri çekilirken)
+  textReveal('OSTEOPATİK BAKIŞ', W / 2, H * .805, 30, 9.7, 10.4, 12.1, t, { weight: 500, font: 'Inter', track: 12, color: '178,205,168' });
+  textReveal('Beden bir bütündür.', W / 2, H * .805 + 66, 60, 10.0, 10.9, 12.1, t, { weight: 300, track: 1 });
   // ana mesaj
   const tm = 12.9;
   if (t > tm - .2) {
-    const dim = sm(tm - .4, tm + .6, t) * (1 - sm(16.2, 17, t)) * .45;
+    const dim = sm(tm - .4, tm + .6, t) * .45;
     ctx.fillStyle = `rgba(0,0,0,${dim})`; ctx.fillRect(0, 0, W, H);
   }
-  textReveal('Ağrının olduğu yer,', W / 2, H * .44, 70, tm, tm + .9, 16.1, t, { weight: 300, track: 1 });
-  textReveal('kaynağı olmayabilir.', W / 2, H * .44 + 96, 70, tm + .8, tm + 1.8, 16.1, t, { weight: 500, track: 1 });
-  // marka
-  const tb = 16.5;
+  textReveal('Ağrının olduğu yer,', W / 2, H * .44, 70, tm, tm + .9, 15.9, t, { weight: 300, track: 1 });
+  textReveal('kaynağı olmayabilir.', W / 2, H * .44 + 96, 70, tm + .8, tm + 1.8, 15.9, t, { weight: 500, track: 1 });
+  // marka kartı: bedenin ışığından krem zemine açılış (marka kimliği renkleri)
+  const tb = 16.2;
   if (t > tb) {
-    const a = sm(tb, tb + 1, t);
-    textReveal(BRAND.name, W / 2, H * .47, 104, tb, tb + 1.1, 99, t, { weight: 200, track: 26 });
-    // ince çizgi
-    const lw = eio(inv(tb + .5, tb + 1.4, t)) * 360;
-    if (lw > 0) {
-      const lg = ctx.createLinearGradient(W / 2 - lw / 2, 0, W / 2 + lw / 2, 0);
-      lg.addColorStop(0, 'rgba(127,216,255,0)'); lg.addColorStop(.5, 'rgba(160,225,255,.9)'); lg.addColorStop(1, 'rgba(127,216,255,0)');
-      ctx.fillStyle = lg; ctx.fillRect(W / 2 - lw / 2, H * .47 + 82, lw, 2);
+    const cy = H * .42, p = sm(tb, tb + 1.1, t);
+    // önce bedenden yayılan beyaz ışık, sonra krem marka kartına yumuşak geçiş
+    const fl = Math.sin(Math.PI * inv(tb - .2, tb + 1.2, t));
+    const fg = ctx.createRadialGradient(W / 2, H * .4, 0, W / 2, H * .4, H * (.25 + .5 * p));
+    fg.addColorStop(0, `rgba(235,245,255,${.85 * fl})`); fg.addColorStop(1, 'rgba(235,245,255,0)');
+    ctx.fillStyle = fg; ctx.fillRect(0, 0, W, H);
+    ctx.save(); ctx.globalAlpha = p;
+    const bg = ctx.createRadialGradient(W / 2, H * .45, 50, W / 2, H * .5, H * .8);
+    bg.addColorStop(0, '#f6f4ef'); bg.addColorStop(1, '#e3e0d6'); ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+    // köşelerde yumuşak adaçayı yeşili formlar (marka görselindeki gibi)
+    for (const [x, y, r, a] of [[-60, 120, 440, .4], [W + 80, H - 120, 500, .34], [W + 40, 160, 260, .14]]) {
+      const g = ctx.createRadialGradient(x, y + (1 - p) * 40, 0, x, y, r); g.addColorStop(0, `rgba(${BRAND.sage},${a})`); g.addColorStop(1, `rgba(${BRAND.sage},0)`);
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
     }
-    textReveal(BRAND.tagline, W / 2, H * .47 + 140, 30, tb + .9, tb + 1.8, 99, t, { weight: 400, font: 'Inter', track: 8, color: '190,220,240' });
-    if (BRAND.handle) textReveal(BRAND.handle, W / 2, H * .88, 30, tb + 1.2, tb + 2, 99, t, { weight: 300, font: 'Inter', track: 3, color: '170,190,210' });
+    ctx.restore();
+    const G = BRAND.green, o = { shadow: false, color: G };
+    textReveal(BRAND.title, W / 2, cy - 96, 42, tb + .7, tb + 1.4, 99, t, { ...o, weight: 500, font: 'Inter', track: 18 });
+    textReveal(BRAND.name, W / 2, cy, 96, tb + .85, tb + 1.65, 99, t, { ...o, weight: 700, track: 1, maxW: 960 });
+    const lw = eio(inv(tb + 1.3, tb + 2.0, t)) * 520;
+    if (lw > 0) { ctx.fillStyle = `rgba(${BRAND.sage},.9)`; ctx.fillRect(W / 2 - lw / 2, cy + 74, lw, 2); }
+    BRAND.lines.forEach((ln, i) => textReveal(ln, W / 2, cy + 136 + i * 62, 42, tb + 1.5 + i * .18, tb + 2.2 + i * .18, 99, t, { ...o, font: 'Inter', track: 0.5, color: '45,55,42', maxW: 940 }));
+    if (BRAND.handle) textReveal(BRAND.handle, W / 2, H * .9, 32, tb + 1.9, tb + 2.5, 99, t, { ...o, weight: 400, font: 'Inter', track: 2 });
   }
   // film greni
   ctx.save(); ctx.globalAlpha = .045; ctx.globalCompositeOperation = 'overlay';
   const f = Math.floor(t * FPS);
   ctx.translate(-(f * 73 % 256), -(f * 151 % 256));
   ctx.fillStyle = ctx.createPattern(grain, 'repeat'); ctx.fillRect(0, 0, W + 256, H + 256); ctx.restore();
-  // son kararma
-  const end = sm(DUR - .5, DUR, t);
-  if (end > 0) { ctx.fillStyle = `rgba(0,0,0,${end})`; ctx.fillRect(0, 0, W, H); }
 }
 
 /* =====================================================================
@@ -430,12 +634,23 @@ function update(t) {
   camAt(t);
   dust.uniforms.uT.value = t; dust.uniforms.uA.value = sm(0, 2, t) * (1 - sm(16.5, 18, t) * .7);
   // beden ve kemikler
-  const bodyA = sm(.2, 1.8, t) * (1 - sm(16.3, 17.6, t) * .88);
+  const bodyA = sm(.2, 1.0, t) * (1 - sm(16.2, 17, t));
   skinU.uT.value = t; skinU.uA.value = bodyA;
-  boneMat.opacity = sm(.6, 2.4, t) * (1 - sm(16.3, 17.6, t) * .85) * (.55 + .45 * sm(3.5, 5.5, t) * (1 - sm(9, 12, t) * .5));
+  const bA = sm(.2, .8, t) * (1 - sm(16.2, 17, t)) * (.75 + .25 * sm(3.5, 5.5, t) * (1 - sm(9, 12, t) * .5));
+  boneMats.forEach(({ m, k }) => m.opacity = bA * k);
+  boneU.uT.value = t;
+  const scan = lerp(-.05, 1.85, eio(inv(.3, 2.5, t)));
+  boneU.uScan.value = t < 2.6 ? scan : 99; skinU.uScan.value = t < 2.6 ? scan + .02 : 99;
+  // osteopatik vurgu: önce omuz kuşağı + üst torakal omurga, sonra tüm beden
+  hiA.userData.hi.value = sm(4.6, 6, t) * (1 - sm(8.6, 10, t)) * .7;
+  hiB.userData.hi.value = sm(9.4, 10.6, t) * (1 - sm(12.2, 13.4, t)) * 1.9;
+  // canlılık: nefes ve baş duruşu
+  const br = .5 + .5 * Math.sin(t * 1.35 - 1.2);
+  ribP.o.scale.set(1 + .014 * br, 1 + .004 * br, 1 + .022 * br);
+  headP.o.rotation.z = .07 * sm(1.8, 3.2, t) * (1 - sm(9, 11, t)); headP.o.rotation.x = .03 * sm(2, 3.5, t) * (1 - sm(9, 11, t));
   // ağrı: belirir, yakın planda yoğun; geri çekilince ağın bir parçasına dönüşür
   const beat = .5 + .5 * Math.sin(t * 5.7);                // ~0.9 Hz nabız (müzikle eşleşik)
-  const painI = sm(.7, 1.8, t) * (1 - sm(11.2, 13.4, t) * .8) * (1 - sm(16.3, 17.2, t));
+  const painI = sm(1.6, 2.4, t) * (1 - sm(11.2, 13.4, t) * .8) * (1 - sm(16.3, 17.2, t));
   skinU.uPainI.value = painI; skinU.uPainR.value = .1 + .02 * beat;
   painCore.material.opacity = painI * (.55 + .25 * beat) * (1 - sm(3.5, 6, t) * .5 + sm(8.5, 11, t) * .5);
   painCore.scale.setScalar(.11 + .03 * beat - sm(3.5, 6, t) * .07 + sm(8.5, 11, t) * .05);
