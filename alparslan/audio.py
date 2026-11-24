@@ -10,7 +10,7 @@ import sys, wave
 import numpy as np
 
 SR = 48000
-DUR = 19.0
+DUR = 20.0
 N = int(SR * DUR)
 rng = np.random.default_rng(11)
 L = np.zeros(N); R = np.zeros(N)

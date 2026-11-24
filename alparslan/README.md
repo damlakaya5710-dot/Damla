@@ -1,21 +1,21 @@
 # Fizyoterapist Alparslan Erişti: "Ağrı burada, peki ya kaynağı?"
 
-`output/alparslan_agri_kaynagi.mp4`: 1080×1920 (9:16, Reels/TikTok/Shorts), 30 fps, 19 sn, H.264 + AAC.
+`output/alparslan_agri_kaynagi.mp4`: 1080×1920 (9:16, Reels/TikTok/Shorts), 30 fps, 20 sn, H.264 + AAC.
+
+## Görsel dil
+Marka afişiyle aynı estetik: krem zemin ve adaçayı yeşili kavisler, adaçayı yeşili/bej tonlarda yarı saydam kas sistemi,
+sırttan seçilen omurga, beden etrafında akan ince altın hatlar ve Cormorant Garamond serif tipografi.
+Beden, tek tek modellenmiş kas kitlelerinin (trapez, deltoid, latissimus, gluteus, kuadriseps vb.) yumuşak birleşimiyle
+tek parça bir ağ olarak üretilir. Her kas, kendi lif yönünde dokulanır ve kas sınırları gölgelenir. İskelet, bedenin içinden görünür.
 
 ## Akış
 | Süre | Görüntü | Yazı |
 |---|---|---|
-| 0–3 sn | Ayaktan başa yükselen bir tarama çizgisi anatomik iskeleti ve yarı saydam bedeni ortaya çıkarır. Kaburga kafesi nefes alır. Sağ omuz kırmızı ışıkla nabız gibi atar, baş ağrıdan hafifçe uzaklaşır. | "Ağrı burada." |
-| 3–8.3 sn | Kamera omuz ile boyun arasına yaklaşır ve arkaya döner. Kas lifleri ve sinir yolları çizilir. Omuz kuşağı (köprücük, kürek kemiği, ilk kaburgalar) ile üst torakal omurga sıcak bir ışıkla vurgulanır. | "Peki ya kaynağı?" |
-| 8.3–12.6 sn | Kamera uzaklaşıp bedenin etrafında döner. Miyofasyal zincirler tüm bedene açılır, sinyaller her yerden omuza akar. **Osteopatik vurgu:** leğen, sakrum, sakroiliak eklem, kalçalar, ayaklar, kafatası ve çene eklemi yanar. | "OSTEOPATİK BAKIŞ · Beden bir bütündür." |
-| 12.9–15.9 sn | Sahne kararır. | "Ağrının olduğu yer, **kaynağı olmayabilir.**" |
-| 16.2–19 sn | Bedenden yayılan ışık, marka kimliğindeki krem/adaçayı yeşili karta dönüşür. | FİZYOTERAPİST · **ALPARSLAN ERİŞTİ** · **Osteopati** \| Manuel Terapi · Psikonöroimmünoloji \| Klinik Pilates |
-
-Boyun yalnızca örnek olarak kullanılır. Hiçbir aşamada tek kaynak gibi vurgulanmaz: yakın planda sırt, göğüs, kol ve torakal omurga da aynı anda öne çıkar. Geniş planda ise vurgu bedenin bütününe yayılır.
-
-## İskelet
-Kafatası (göz çukurları, elmacık kemiği, dişler, alt çene, çene eklemi), 24 omur ve diskleri (gövde, arka kemer, çıkıntılar), 12 çift kaburga, kıkırdak ve sternum,
-köprücük kemiği, spinalı kürek kemiği, epifizli uzun kemikler (humerus, radius/ulna, femur, tibia/fibula), leğen kemiği (iliak kanatlar, sakrum, pubis/iskium), el ve ayak kemikleri.
+| 0–3 sn | Altın bir tarama çizgisi ayaktan başa kas sistemini ortaya çıkarır (arkadan 3/4 açı). Sağ omuz kırmızı nabız gibi atar. | "Ağrı burada." |
+| 3–8.3 sn | Kamera omuz ile boyun arasına yaklaşır. Beden saydamlaşır, iskelet ile kas ve sinir hatları görünür. Omuz kuşağı ve üst torakal omurga vurgulanır. | "*Peki ya kaynağı?*" |
+| 8.3–12.6 sn | Kamera uzaklaşır. Altın fasyal zincirler ve sarmallar tüm bedeni sarar. Leğen, sakrum, ayaklar, kafatası ve çene eklemi yanar. | "Vücudunuz *bir bütündür.* / Osteopatik bakış açısı." |
+| 12.9–15.9 sn | Krem perde. | "Ağrının olduğu yer, *kaynağı olmayabilir.*" |
+| 16.3–20 sn | Afiş düzeni: üstte marka, ortada altın hatlarla beden, altta iletişim satırı. | FİZYOTERAPİST · ALPARSLAN ERİŞTİ · uzmanlıklar · Ayvalık, Balıkesir, No 456 İş Merkezi, D:27 · +90 530 852 49 95 |
 
 ## Yeniden üretme
 ```bash
@@ -26,11 +26,10 @@ node stills.js /tmp/kareler 2 6 10 14 18                             # seçili a
 Tarayıcıda önizleme: `node server.js`, ardından `http://127.0.0.1:8080/scene.html?play=1` adresini açın.
 
 ## Özelleştirme
-- **Marka metinleri ve renkleri:** `scene.html` içindeki `BRAND` nesnesi (unvan, ad, uzmanlık satırları, hesap adı, krem/yeşil tonları).
+- **Marka metinleri ve renkleri:** `scene.html` içindeki `BRAND` nesnesi (unvan, ad, uzmanlıklar, adres, telefon, renkler).
 - **Logo:** Gerçek logoyu `overlay()` fonksiyonunun "marka" bölümünde `ctx.drawImage(...)` ile ekleyebilirsiniz.
 - **Ağrı bölgesi:** `PAIN` sabiti (ör. diz için `V(.1, .5, .03)`). Bu durumda bağlantı hatlarının da yeniden düzenlenmesi gerekir.
 - **Zamanlama:** Kamera için `KF` dizisi, sahne durumu için `update(t)` fonksiyonu. Müzik vuruşları `audio.py` içinde aynı saniyelere göre ayarlıdır.
 
 ## Not
-Anatomi prosedürel ve stilize bir modeldir (yarı saydam "x-ray" estetiği). Fotogerçekçi bir anatomi için lisanslı bir GLB modeli
-(ör. Zygote, TurboSquid) `GLTFLoader` ile sahneye yüklenebilir. Kamera, ışık, bağlantı hatları ve yazı katmanı olduğu gibi kullanılmaya devam eder.
+Yazı tipi: Cormorant Garamond (SIL Open Font License, `fonts/`). Telefon ve konum simgeleri Material Icons'tan alındı (Apache 2.0).
