@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<title>Ağrının Kaynağı</title>
+<style>
+  html,body{margin:0;background:#000;height:100%;overflow:hidden}
+  body{display:flex;align-items:center;justify-content:center}
+  #out{display:block;height:100vh;width:auto;max-width:100vw;aspect-ratio:9/16}
+  #gl{position:absolute;left:-99999px;top:0}
+  #play{position:fixed;inset:0;margin:auto;width:220px;height:60px;border:1px solid #ffffff55;background:#0008;color:#fff;
+        font:300 18px Inter,sans-serif;letter-spacing:.2em;cursor:pointer;border-radius:30px;display:none}
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js", "three/addons/": "./vendor/addons/" } }
+</script>
+</head>
+<body>
+<canvas id="out" width="1080" height="1920"></canvas>
+<button id="play">OYNAT ▶</button>
+<script type="module">
+/* =====================================================================
+   ALPARSLAN — "Ağrı burada, peki ya kaynağı?"  (1080x1920, 30 fps, 19 sn)
+   Three.js ile prosedürel 3B anatomik animasyon.
+   Her kare renderFrame(i) ile deterministik çizilir (render.js bunu kullanır).
+   ?play=1 → tarayıcıda gerçek zamanlı önizleme (müzik: output/muzik.wav)
+   ===================================================================== */
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+/* ---------------- marka ayarları (buradan değiştirilebilir) ---------------- */
+const BRAND = {
+  name: 'ALPARSLAN',
+  tagline: 'BÜTÜNCÜL BAKIŞ · KALICI ÇÖZÜM',   // ← kendi sloganınızla değiştirin
+  handle: '',                                  // ör. '@alparslan' (boş bırakılırsa çizilmez)
+};
+
+const W = 1080, H = 1920, FPS = 30, DUR = 19, NF = FPS * DUR;
+window.NF = NF;
+
+/* ---------------- yardımcılar ---------------- */
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const inv = (a, b, x) => clamp((x - a) / (b - a));
+const sm = (a, b, x) => { const t = inv(a, b, x); return t * t * (3 - 2 * t); };
+const eio = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;   // easeInOutCubic
+const win = (t, a, b, f = .6) => sm(a, a + f, t) * (1 - sm(b - f, b, t));    // giriş-çıkış penceresi
+const V = (x, y, z) => new THREE.Vector3(x, y, z);
+
+/* ---------------- renderer ---------------- */
+const glc = document.createElement('canvas'); glc.id = 'gl'; document.body.appendChild(glc);
+const renderer = new THREE.WebGLRenderer({ canvas: glc, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1); renderer.setSize(W, H, false);
+renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = .85;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x03060b);
+scene.fog = new THREE.FogExp2(0x03060b, 0.06);
+const camera = new THREE.PerspectiveCamera(30, W / H, 0.02, 60);
+
+/* ---------------- ışıklar ---------------- */
+scene.add(new THREE.HemisphereLight(0xb0ccff, 0x161620, 0.9));
+const key = new THREE.DirectionalLight(0xfff4e8, 1.3); key.position.set(2, 3, 3); scene.add(key);
+const rim = new THREE.DirectionalLight(0x5fb6ff, 1.4); rim.position.set(-3, 2, -3); scene.add(rim);
+const painLight = new THREE.PointLight(0xff2020, 0, 0.2, 2); scene.add(painLight);
+
+/* ---------------- arka plan: koyu gradyan küre + yüzen toz ---------------- */
+{
+  const g = new THREE.SphereGeometry(30, 32, 16);
+  const m = new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    vertexShader: `varying vec3 vP; void main(){ vP=normalize(position); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
+    fragmentShader: `varying vec3 vP; void main(){
+      float h=vP.y*.5+.5; vec3 c=mix(vec3(.004,.008,.016),vec3(.012,.03,.055),smoothstep(.25,.75,h));
+      c+=vec3(.02,.04,.07)*pow(max(0.,1.-abs(vP.y-.05)*2.),3.);
+      gl_FragColor=vec4(c,1.); }`
+  });
+  scene.add(new THREE.Mesh(g, m));
+}
+let rnd = (() => { let s = 1234567; return () => (s = (s * 16807) % 2147483647) / 2147483647; })();
+const dust = (() => {
+  const n = 900, pos = new Float32Array(n * 3), ph = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    pos[i * 3] = (rnd() - .5) * 6; pos[i * 3 + 1] = rnd() * 3.2 - .2; pos[i * 3 + 2] = (rnd() - .5) * 6; ph[i] = rnd() * 100;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('ph', new THREE.BufferAttribute(ph, 1));
+  const m = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, uniforms: { uT: { value: 0 }, uA: { value: 1 } },
+    vertexShader: `attribute float ph; uniform float uT; varying float vA;
+      void main(){ vec3 p=position; p.y+=sin(uT*.2+ph)*.08+uT*.012; p.x+=sin(uT*.13+ph*1.7)*.05;
+        vec4 mv=modelViewMatrix*vec4(p,1.); gl_Position=projectionMatrix*mv;
+        gl_PointSize=clamp(10./-mv.z,1.,6.); vA=.25+.25*sin(uT*.8+ph); }`,
+    fragmentShader: `uniform float uA; varying float vA; void main(){ float d=length(gl_PointCoord-.5);
+      gl_FragColor=vec4(vec3(.55,.75,1.)*smoothstep(.5,0.,d)*vA*uA,1.); }`
+  });
+  const p = new THREE.Points(g, m); scene.add(p); return m;
+})();
+
+/* =====================================================================
+   1) DERİ: Fresnel "cam beden" (x-ray hissi), ağrı bölgesi kırmızıya döner
+   ===================================================================== */
+const PAIN = V(0.185, 1.415, 0.0);
+const skinU = {
+  uT: { value: 0 }, uA: { value: 0 }, uPain: { value: PAIN }, uPainI: { value: 0 }, uPainR: { value: .12 },
+  uWave: { value: 0 }, uWaveC: { value: V(0, 0, 0) }
+};
+const skinMat = new THREE.ShaderMaterial({
+  uniforms: skinU, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  vertexShader: `varying vec3 vN; varying vec3 vV; varying vec3 vW;
+    void main(){ vec4 w=modelMatrix*vec4(position,1.); vW=w.xyz; vN=normalize(mat3(modelMatrix)*normal);
+      vV=normalize(cameraPosition-w.xyz); gl_Position=projectionMatrix*viewMatrix*w; }`,
+  fragmentShader: `uniform float uT,uA,uPainI,uPainR,uWave; uniform vec3 uPain,uWaveC;
+    varying vec3 vN; varying vec3 vV; varying vec3 vW;
+    void main(){
+      float f=pow(1.-abs(dot(normalize(vN),vV)),2.4);
+      vec3 base=vec3(.30,.62,1.)*(f*.38+.012);
+      // yatay tarama çizgileri: çok ince, premium "tarayıcı" dokusu
+      base*=.9+.1*sin(vW.y*420.);
+      float d=distance(vW,uPain);
+      float pm=smoothstep(uPainR,0.,d)*uPainI;
+      float beat=.75+.25*sin(uT*5.7);
+      vec3 red=vec3(1.,.07,.04)*(f*.9+.22)*beat;
+      vec3 c=mix(base,red,pm);
+      // bütünlük dalgası: merkezden tüm bedene yayılan ışık halkası
+      float wd=distance(vW,uWaveC);
+      c+=vec3(.5,.8,1.)*smoothstep(.06,0.,abs(wd-uWave))*step(.001,uWave)*(f*.6+.1)*.6;
+      gl_FragColor=vec4(c*uA,1.);
+    }`
+});
+const body = new THREE.Group(); scene.add(body);
+function addSkin(geo, pos, scl) { const m = new THREE.Mesh(geo, skinMat); if (pos) m.position.copy(pos); if (scl) m.scale.copy(scl); body.add(m); return m; }
+function limb(a, b, ra, rb, mat = skinMat, seg = 28) {           // a→b arası konik silindir
+  const len = a.distanceTo(b);
+  const g = new THREE.CylinderGeometry(rb, ra, len, seg, 1, true);
+  const m = new THREE.Mesh(g, mat);
+  m.position.copy(a).add(b).multiplyScalar(.5);
+  m.quaternion.setFromUnitVectors(V(0, 1, 0), b.clone().sub(a).normalize());
+  return m;
+}
+// gövde (lathe profili)
+{
+  const prof = [[0, .84], [.11, .855], [.165, .9], [.172, .95], [.158, 1.01], [.138, 1.07], [.142, 1.13], [.158, 1.2],
+                [.176, 1.28], [.188, 1.35], [.18, 1.405], [.13, 1.445], [.075, 1.47], [.05, 1.49]].map(([r, y]) => new THREE.Vector2(r, y));
+  const g = new THREE.LatheGeometry(prof, 64);
+  addSkin(g, V(0, 0, -.03), V(1, 1, .64));
+}
+addSkin(new THREE.CylinderGeometry(.047, .056, .14, 32, 1, true), V(0, 1.53, -.02));               // boyun
+addSkin(new THREE.SphereGeometry(.1, 48, 32), V(0, 1.675, .0), V(.86, 1.12, 1));                    // baş
+const SH = [V(.19, 1.405, -.02), V(-.19, 1.405, -.02)], EL = [V(.245, 1.12, -.02), V(-.245, 1.12, -.02)],
+      WR = [V(.285, .86, .03), V(-.285, .86, .03)], HP = [V(.095, .9, -.02), V(-.095, .9, -.02)],
+      KN = [V(.1, .5, 0), V(-.1, .5, 0)], AN = [V(.1, .085, -.02), V(-.1, .085, -.02)];
+for (let s = 0; s < 2; s++) {
+  addSkin(new THREE.SphereGeometry(.058, 32, 24), SH[s].clone().add(V(s ? -.008 : .008, -.01, 0)), V(1, 1.05, .95)); // deltoid
+  body.add(limb(SH[s].clone().add(V(0, -.03, 0)), EL[s], .05, .038));
+  body.add(limb(EL[s], WR[s], .037, .026));
+  addSkin(new THREE.SphereGeometry(.03, 24, 16), WR[s].clone().add(V(s ? -.008 : .008, -.055, .005)), V(.65, 1.5, 1.05)); // el
+  body.add(limb(HP[s], KN[s], .078, .05));
+  body.add(limb(KN[s], AN[s], .05, .032));
+  addSkin(new THREE.SphereGeometry(.04, 24, 16), V(s ? -.1 : .1, .035, .04), V(.8, .55, 2.0));   // ayak
+}
+
+/* =====================================================================
+   2) İSKELET: kemikler (fildişi, hafif parlak)
+   ===================================================================== */
+const boneMat = new THREE.MeshPhysicalMaterial({ color: 0xf4efe4, roughness: .42, metalness: 0, clearcoat: .4, clearcoatRoughness: .5, sheen: .6, sheenColor: new THREE.Color(0x9fc8ff), emissive: 0x24221e, transparent: true, opacity: 0 });
+const skel = new THREE.Group(); scene.add(skel);
+const bone = (a, b, r, rb = r) => { const m = limb(a, b, r, rb, boneMat, 14); m.geometry = new THREE.CylinderGeometry(rb, r, a.distanceTo(b), 14); skel.add(m); return m; };
+const knob = (p, r, s) => { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 18, 12), boneMat); m.position.copy(p); if (s) m.scale.copy(s); skel.add(m); return m; };
+const tubeBone = (pts, r) => { const c = new THREE.CatmullRomCurve3(pts); const m = new THREE.Mesh(new THREE.TubeGeometry(c, 40, r, 8), boneMat); skel.add(m); return m; };
+// omurga
+const SPINE = new THREE.CatmullRomCurve3([V(0, .97, -.065), V(0, 1.07, -.05), V(0, 1.2, -.085), V(0, 1.32, -.09), V(0, 1.43, -.06), V(0, 1.51, -.03), V(0, 1.6, -.025)]);
+for (let i = 0; i < 24; i++) {
+  const u = i / 23, p = SPINE.getPointAt(u), cerv = u > .7;
+  const v = new THREE.Mesh(new THREE.CylinderGeometry(cerv ? .013 : .019, cerv ? .013 : .019, cerv ? .012 : .017, 14), boneMat);
+  v.position.copy(p); skel.add(v);
+  const sp = new THREE.Mesh(new THREE.BoxGeometry(.008, .01, cerv ? .025 : .035), boneMat);
+  sp.position.copy(p).add(V(0, -.004, cerv ? -.022 : -.03)); sp.rotation.x = .5; skel.add(sp);
+  const tp = new THREE.Mesh(new THREE.BoxGeometry(cerv ? .05 : .065, .006, .008), boneMat); tp.position.copy(p).add(V(0, 0, -.012)); skel.add(tp);
+}
+// kafatası + çene
+knob(V(0, 1.69, -.005), .082, V(.92, 1.0, 1.08));
+tubeBone([V(-.05, 1.63, -.005), V(-.04, 1.59, .04), V(0, 1.58, .062), V(.04, 1.59, .04), V(.05, 1.63, -.005)], .0065);
+// kaburgalar + sternum
+for (let k = 0; k < 10; k++) {
+  const y = 1.37 - k * .026, a = .085 + .055 * Math.sin(Math.PI * (k + 2) / 13);
+  for (const s of [1, -1]) tubeBone([V(s * .015, y, -.09), V(s * a * .75, y - .004, -.105), V(s * a, y - .02, -.025), V(s * a * .82, y - .045, .055), V(s * .03, y - .07, .08)], .0055);
+}
+bone(V(0, 1.39, .085), V(0, 1.18, .09), .012, .009);
+// köprücük, kürek kemiği, kol
+for (const s of [1, -1]) {
+  tubeBone([V(s * .02, 1.405, .07), V(s * .09, 1.425, .065), V(s * .175, 1.43, .0)], .007);
+  const sh = new THREE.Shape(); sh.moveTo(0, 0); sh.lineTo(.075 * 1, .035); sh.lineTo(.06, -.02); sh.lineTo(.015, -.16); sh.lineTo(-.01, -.05); sh.closePath();
+  const sg = new THREE.ExtrudeGeometry(sh, { depth: .006, bevelEnabled: true, bevelThickness: .003, bevelSize: .004, bevelSegments: 2 });
+  const sc = new THREE.Mesh(sg, boneMat); sc.position.set(s * .085, 1.39, -.115); sc.scale.x = s; sc.rotation.y = s * .45; skel.add(sc);
+  knob(SH[s < 0 ? 1 : 0].clone().add(V(-s * .012, -.012, 0)), .024);
+  bone(SH[s < 0 ? 1 : 0].clone().add(V(-s * .01, -.03, 0)), EL[s < 0 ? 1 : 0], .012, .01);
+  const e = EL[s < 0 ? 1 : 0], w = WR[s < 0 ? 1 : 0];
+  bone(e.clone().add(V(s * .01, 0, -.008)), w.clone().add(V(s * .008, 0, -.006)), .007, .006);
+  bone(e.clone().add(V(-s * .008, 0, .008)), w.clone().add(V(-s * .006, 0, .008)), .006, .008);
+  for (let f = 0; f < 4; f++) bone(w.clone().add(V(s * (.012 - f * .008), -.03, .005 + f * .004)), w.clone().add(V(s * (.014 - f * .01), -.1 + Math.abs(f - 1.5) * .01, .01 + f * .005)), .003);
+}
+// leğen
+{
+  const pel = new THREE.Mesh(new THREE.TorusGeometry(.085, .022, 12, 40), boneMat);
+  pel.position.set(0, .94, -.02); pel.rotation.x = Math.PI / 2 - .35; pel.scale.set(1.25, 1, .8); skel.add(pel);
+  knob(V(0, .93, -.075), .03, V(1, 1.4, .6));
+  for (const s of [1, -1]) knob(V(s * .1, .99, -.02), .045, V(1, 1.1, .35));
+}
+// bacaklar
+for (let s = 0; s < 2; s++) {
+  const sg = s ? -1 : 1;
+  knob(HP[s].clone().add(V(-sg * .01, .0, 0)), .022);
+  bone(HP[s].clone().add(V(sg * .01, -.02, 0)), KN[s].clone().add(V(0, .015, 0)), .014, .016);
+  knob(KN[s].clone().add(V(0, 0, .035)), .017, V(1, 1.2, .6));
+  bone(KN[s].clone().add(V(0, -.015, 0)), AN[s], .015, .011);
+  bone(KN[s].clone().add(V(sg * .02, -.03, -.01)), AN[s].clone().add(V(sg * .02, 0, -.01)), .006);
+  for (let f = 0; f < 5; f++) bone(AN[s].clone().add(V(sg * (.0 - f * .01) + sg * .02, -.03, .0)), V(sg * (.12 - f * .012), .01, .11 - Math.abs(f - 1) * .008), .0045);
+}
+
+/* =====================================================================
+   3) BAĞLANTILAR: kas lifleri, sinirler, fasyal hatlar
+      Hepsi ağrı noktasında (omuz) başlar; uv.x = 0 → omuz.
+   ===================================================================== */
+const lineMat = (col, w = 1) => new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  uniforms: { uC: { value: new THREE.Color(col) }, uRev: { value: 0 }, uA: { value: 0 }, uT: { value: 0 }, uDir: { value: 1 }, uOff: { value: rnd() * 10 }, uPulse: { value: 0 }, uLen: { value: 1 } },
+  vertexShader: `varying vec2 vU; varying vec3 vN; varying vec3 vV;
+    void main(){ vU=uv; vec4 w=modelMatrix*vec4(position,1.); vN=normalize(mat3(modelMatrix)*normal); vV=normalize(cameraPosition-w.xyz);
+      gl_Position=projectionMatrix*viewMatrix*w; }`,
+  fragmentShader: `uniform vec3 uC; uniform float uRev,uA,uT,uDir,uOff,uPulse,uLen; varying vec2 vU; varying vec3 vN; varying vec3 vV;
+    void main(){
+      float x=vU.x;
+      if(x>uRev) discard;
+      float core=.35+.65*pow(abs(dot(normalize(vN),vV)),1.5);
+      float head=smoothstep(.12/uLen,0.,uRev-x)*step(uRev,.999)*2.5;          // açılan uçta parlak kıvılcım
+      float ph=fract(x*uLen*2.2-uT*.9*uDir+uOff);
+      float pulse=smoothstep(.0,.03,ph)*smoothstep(.16,.03,ph)*uPulse*1.8;      // hat boyunca akan sinyal
+      vec3 c=uC*(core*.55+head+pulse);
+      gl_FragColor=vec4(c*uA,1.);
+    }`
+});
+const lines = [];
+function addLine(pts, r, col, group, opts = {}) {
+  const c = new THREE.CatmullRomCurve3(pts, false, 'centripetal');
+  const len = c.getLength();
+  const g = new THREE.TubeGeometry(c, Math.max(24, Math.round(len * 160)), r, 8);
+  const m = lineMat(col); m.uniforms.uLen.value = len;
+  const mesh = new THREE.Mesh(g, m); scene.add(mesh);
+  const L = { mesh, m, group, len, ...opts }; lines.push(L); return L;
+}
+const MUSCLE = 0xffa86a, NERVE = 0xffe7b0, FASCIA = 0x7fd8ff;
+const P = PAIN;
+// --- Grup A: omuz çevresi (yakın plan) — boyun, sırt, göğüs ve kola eşit ağırlıkla bağlanır ---
+for (let i = 0; i < 4; i++) {          // üst trapez lifleri → boyun/kafa tabanı
+  const y = 1.47 + i * .045;
+  addLine([P.clone().add(V(-.005, .01, -.03)), V(.13, 1.44 + i * .01, -.055), V(.06, y - .01, -.075 + i * .01), V(.008, y, -.06 + i * .012)], .0035, MUSCLE, 'A', { d: i * .15 });
+}
+addLine([V(.12, 1.385, -.095), V(.09, 1.44, -.07), V(.05, 1.5, -.045), V(.03, 1.57, -.03)], .004, MUSCLE, 'A', { d: .3 });    // levator scapulae
+for (let i = 0; i < 4; i++) {          // orta trapez / rhomboid → torakal omurga
+  const y = 1.36 - i * .045;
+  addLine([P.clone().add(V(-.02, -.01, -.06)), V(.11, y + .02, -.12), V(.06, y, -.13), V(.008, y - .015, -.115)], .0033, MUSCLE, 'A', { d: .5 + i * .12 });
+}
+for (let i = 0; i < 3; i++)            // göğüs kasları → sternum / kaburgalar
+  addLine([P.clone().add(V(-.01, -.03, .04)), V(.13, 1.34 - i * .02, .08), V(.07, 1.31 - i * .04, .1), V(.015, 1.32 - i * .05, .095)], .0033, MUSCLE, 'A', { d: .7 + i * .12 });
+// brakiyal pleksus: boyun köklerinden koltuk altına ve kola (sinir)
+for (let i = 0; i < 4; i++)
+  addLine([V(.15, 1.33, .02), V(.1, 1.39, .005), V(.06, 1.44 + i * .015, -.01), V(.02, 1.47 + i * .02, -.025)], .0024, NERVE, 'A', { d: .2 + i * .1 });
+addLine([P.clone().add(V(.01, -.02, .02)), V(.22, 1.26, .02), V(.245, 1.12, .015), V(.27, .98, .03), V(.29, .82, .045)], .0028, NERVE, 'A', { d: .4 });
+// deltoid sarmalı
+for (let i = 0; i < 3; i++)
+  addLine([V(.15, 1.43, .04 - i * .04), V(.215, 1.39, .03 - i * .035), V(.235, 1.31, .01 - i * .02), V(.23, 1.25, -.005)], .003, MUSCLE, 'A', { d: .6 + i * .1 });
+
+// --- Grup B: bütün beden — miyofasyal zincirler (geri çekilirken açılır) ---
+const S = (x, y, z) => V(x, y, z);
+const chains = [
+  // arka hat (sağ): omuz → sırt → bel → uyluk arkası → baldır → topuk
+  [P, S(.12, 1.33, -.12), S(.05, 1.18, -.13), S(.05, 1.02, -.1), S(.07, .9, -.1), S(.1, .72, -.08), S(.1, .5, -.05), S(.1, .3, -.07), S(.1, .06, -.06)],
+  // sarmal hat: sağ omuz → sırt çaprazı → sol kaburga → karın → sağ kalça → sağ bacak önü → ayak
+  [P, S(.1, 1.33, -.13), S(-.06, 1.24, -.12), S(-.16, 1.12, -.02), S(-.08, 1.02, .085), S(.07, .93, .08), S(.11, .72, .07), S(.08, .5, .055), S(.11, .28, .04), S(.1, .05, .13)],
+  // ön fonksiyonel hat: sağ omuz → göğüs → karşı kalça → sol uyluk
+  [P, S(.12, 1.34, .1), S(.02, 1.18, .11), S(-.07, 1.0, .1), S(-.1, .85, .07), S(-.1, .62, .06), S(-.1, .5, .05)],
+  // boyun → kafa → çene (yalnızca ağın bir parçası)
+  [P, S(.12, 1.44, -.04), S(.05, 1.52, -.05), S(.04, 1.62, -.07), S(.0, 1.73, -.06), S(-.04, 1.66, .05), S(-.03, 1.6, .06)],
+  // kol hattı: omuz → dirsek → bilek → el
+  [P, S(.235, 1.3, .0), S(.25, 1.12, -.0), S(.275, .98, .03), S(.29, .84, .04), S(.295, .76, .045)],
+  // karşı omuz ve sol kol
+  [P, S(.1, 1.39, -.11), S(-.1, 1.38, -.11), S(-.185, 1.41, -.02), S(-.235, 1.25, -.01), S(-.26, 1.05, .0), S(-.29, .82, .04)],
+  // arka hat (sol) gövde içinden
+  [P, S(.06, 1.3, -.135), S(-.05, 1.15, -.125), S(-.05, 1.0, -.1), S(-.08, .9, -.1), S(-.1, .7, -.08), S(-.1, .5, -.05), S(-.1, .28, -.07), S(-.1, .06, -.06)],
+  // yan hat: omuz → kaburga yanı → kalça yanı → diz dışı → ayak bileği
+  [P, S(.19, 1.3, -.01), S(.175, 1.15, -.01), S(.17, .97, -.01), S(.135, .75, .0), S(.125, .5, .0), S(.115, .25, -.01), S(.12, .07, -.02)],
+];
+chains.forEach((pts, i) => addLine(pts, .0042, i === 3 ? FASCIA : FASCIA, 'B', { d: [0, .25, .45, .6, .15, .7, .35, .5][i] }));
+
+/* ---------------- ışık noktaları (sprite) ---------------- */
+function glowTex(inner = 'rgba(255,255,255,1)', mid = 'rgba(255,255,255,.25)') {
+  const c = document.createElement('canvas'); c.width = c.height = 128; const x = c.getContext('2d');
+  const g = x.createRadialGradient(64, 64, 0, 64, 64, 64);
+  g.addColorStop(0, inner); g.addColorStop(.18, mid); g.addColorStop(1, 'rgba(255,255,255,0)');
+  x.fillStyle = g; x.fillRect(0, 0, 128, 128); const t = new THREE.CanvasTexture(c); return t;
+}
+function ringTex() {
+  const c = document.createElement('canvas'); c.width = c.height = 256; const x = c.getContext('2d');
+  x.strokeStyle = '#fff'; x.lineWidth = 5; x.shadowColor = '#fff'; x.shadowBlur = 14;
+  x.beginPath(); x.arc(128, 128, 100, 0, Math.PI * 2); x.stroke(); return new THREE.CanvasTexture(c);
+}
+const GT = glowTex(), RT = ringTex();
+const spr = (tex, col, s) => { const m = new THREE.SpriteMaterial({ map: tex, color: col, transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending, opacity: 0 }); const sp = new THREE.Sprite(m); sp.scale.setScalar(s); scene.add(sp); return sp; };
+const painCore = spr(GT, 0xff2a1a, .25); painCore.position.copy(PAIN).add(V(0, 0, .02));
+const painHalo = spr(GT, 0xff0a00, .4); painHalo.position.copy(painCore.position);
+const rings = [0, 1, 2].map(() => { const r = spr(RT, 0xff3020, .1); r.position.copy(painCore.position); return r; });
+// bütün bedendeki olası kaynak noktaları — hiçbiri diğerinden belirgin değil
+const NODES = [S(.02, 1.5, -.05), S(0, 1.27, -.13), S(.0, 1.03, -.1), S(-.1, .92, .03), S(.1, .5, .04), S(.1, .06, .08),
+               S(-.04, 1.6, .06), S(-.14, 1.14, .04), S(.25, 1.12, .0), S(-.1, .28, -.06), S(.07, .9, -.1), S(-.185, 1.41, -.02)];
+const nodes = NODES.map((p, i) => { const s = spr(GT, 0xbfe6ff, .09); s.position.copy(p); s.userData.ph = i * 1.37; s.userData.d = (i * 7 % 12) / 12; return s; });
+
+/* ---------------- post-process ---------------- */
+const composer = new EffectComposer(renderer);
+composer.setPixelRatio(1); composer.setSize(W, H);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(W, H), .6, .45, .32); composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+/* =====================================================================
+   KAMERA: küresel koordinatta enterpolasyon (hedef etrafında yörünge)
+   ===================================================================== */
+const KF = [
+  { t: 0.0,  p: V(1.0, 1.25, 4.9),  g: V(0, .95, 0) },
+  { t: 3.1,  p: V(.65, 1.22, 4.1),  g: V(.03, 1.0, 0) },
+  { t: 5.7,  p: V(.6, 1.52, .9),    g: V(.09, 1.43, -.01) },
+  { t: 8.3,  p: V(.62, 1.62, -.62), g: V(.07, 1.38, -.05) },
+  { t: 12.6, p: V(-1.55, 1.25, 4.6), g: V(0, .93, 0) },
+  { t: 19.0, p: V(-1.05, 1.2, 5.2),  g: V(0, .96, 0) },
+];
+const sph = (o) => ({ r: o.length(), th: Math.atan2(o.x, o.z), ph: Math.asin(o.y / o.length()) });
+function camAt(t) {
+  let i = 0; while (i < KF.length - 2 && t > KF[i + 1].t) i++;
+  const a = KF[i], b = KF[i + 1]; let u = eio(inv(a.t, b.t, t));
+  const g = a.g.clone().lerp(b.g, u);
+  const sa = sph(a.p.clone().sub(a.g)), sb = sph(b.p.clone().sub(b.g));
+  // yarıçap için daha yumuşak (log) enterpolasyon
+  const ur = sb.r > sa.r ? 1 - Math.pow(1 - inv(a.t, b.t, t), 2.4) : u;   // uzaklaşırken önce mesafe açılır
+  const r = Math.exp(lerp(Math.log(sa.r), Math.log(sb.r), ur));
+  const th = lerp(sa.th, sb.th, u), ph = lerp(sa.ph, sb.ph, u);
+  const p = V(Math.sin(th) * Math.cos(ph), Math.sin(ph), Math.cos(th) * Math.cos(ph)).multiplyScalar(r).add(g);
+  // çok hafif "el kamerası" salınımı
+  p.x += Math.sin(t * .7) * .006 * r; p.y += Math.sin(t * .53 + 1) * .004 * r;
+  camera.position.copy(p); camera.lookAt(g);
+}
+
+/* =====================================================================
+   2B katman: yazılar, vinyet, film greni
+   ===================================================================== */
+const out = document.getElementById('out'), ctx = out.getContext('2d');
+const grain = document.createElement('canvas'); grain.width = grain.height = 256;
+{ const g = grain.getContext('2d'), id = g.createImageData(256, 256); for (let i = 0; i < id.data.length; i += 4) { const v = rnd() * 255; id.data[i] = id.data[i + 1] = id.data[i + 2] = v; id.data[i + 3] = 255; } g.putImageData(id, 0, 0); }
+function text(str, x, y, size, a, { weight = 300, font = 'Inter Display', track = 0, color = '255,255,255', blur = 0, dy = 0 } = {}) {
+  if (a <= 0.001) return;
+  ctx.save();
+  ctx.font = `${weight} ${size}px "${font}", Inter, sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if ('letterSpacing' in ctx) ctx.letterSpacing = track + 'px';
+  ctx.globalAlpha = a; ctx.fillStyle = `rgb(${color})`;
+  if (blur > 0) ctx.filter = `blur(${blur}px)`;
+  ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 30;
+  ctx.fillText(str, x, y + dy); ctx.restore();
+}
+// harf harf açılan yazı (sinematik)
+function textReveal(str, x, y, size, t0, t1, tOut, t, opt = {}) {
+  const aOut = 1 - sm(tOut, tOut + .6, t);
+  if (t < t0 || aOut <= 0) return;
+  const p = inv(t0, t1, t);
+  const a = sm(0, 1, p) * aOut;
+  const blur = (1 - sm(0, 1, p)) * 10 + sm(tOut, tOut + .6, t) * 6;
+  text(str, x, y, size, a, { ...opt, blur, dy: (1 - eio(p)) * 18 });
+}
+function overlay(t) {
+  ctx.drawImage(glc, 0, 0);
+  // vinyet
+  const vg = ctx.createRadialGradient(W / 2, H * .46, H * .2, W / 2, H / 2, H * .75);
+  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,.72)');
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+  // açılış/kapanış kararması
+  const blk = 1 - sm(0, .9, t);
+  if (blk > 0) { ctx.fillStyle = `rgba(0,0,0,${blk})`; ctx.fillRect(0, 0, W, H); }
+
+  // --- yazılar (minimum) ---
+  textReveal('Ağrı burada.', W / 2, H * .82, 64, 1.1, 1.9, 2.9, t, { weight: 300, track: 2 });
+  textReveal('Peki ya kaynağı?', W / 2, H * .82, 64, 5.3, 6.1, 7.7, t, { weight: 300, track: 2 });
+  // ana mesaj
+  const tm = 12.9;
+  if (t > tm - .2) {
+    const dim = sm(tm - .4, tm + .6, t) * (1 - sm(16.2, 17, t)) * .45;
+    ctx.fillStyle = `rgba(0,0,0,${dim})`; ctx.fillRect(0, 0, W, H);
+  }
+  textReveal('Ağrının olduğu yer,', W / 2, H * .44, 70, tm, tm + .9, 16.1, t, { weight: 300, track: 1 });
+  textReveal('kaynağı olmayabilir.', W / 2, H * .44 + 96, 70, tm + .8, tm + 1.8, 16.1, t, { weight: 500, track: 1 });
+  // marka
+  const tb = 16.5;
+  if (t > tb) {
+    const a = sm(tb, tb + 1, t);
+    textReveal(BRAND.name, W / 2, H * .47, 104, tb, tb + 1.1, 99, t, { weight: 200, track: 26 });
+    // ince çizgi
+    const lw = eio(inv(tb + .5, tb + 1.4, t)) * 360;
+    if (lw > 0) {
+      const lg = ctx.createLinearGradient(W / 2 - lw / 2, 0, W / 2 + lw / 2, 0);
+      lg.addColorStop(0, 'rgba(127,216,255,0)'); lg.addColorStop(.5, 'rgba(160,225,255,.9)'); lg.addColorStop(1, 'rgba(127,216,255,0)');
+      ctx.fillStyle = lg; ctx.fillRect(W / 2 - lw / 2, H * .47 + 82, lw, 2);
+    }
+    textReveal(BRAND.tagline, W / 2, H * .47 + 140, 30, tb + .9, tb + 1.8, 99, t, { weight: 400, font: 'Inter', track: 8, color: '190,220,240' });
+    if (BRAND.handle) textReveal(BRAND.handle, W / 2, H * .88, 30, tb + 1.2, tb + 2, 99, t, { weight: 300, font: 'Inter', track: 3, color: '170,190,210' });
+  }
+  // film greni
+  ctx.save(); ctx.globalAlpha = .045; ctx.globalCompositeOperation = 'overlay';
+  const f = Math.floor(t * FPS);
+  ctx.translate(-(f * 73 % 256), -(f * 151 % 256));
+  ctx.fillStyle = ctx.createPattern(grain, 'repeat'); ctx.fillRect(0, 0, W + 256, H + 256); ctx.restore();
+  // son kararma
+  const end = sm(DUR - .5, DUR, t);
+  if (end > 0) { ctx.fillStyle = `rgba(0,0,0,${end})`; ctx.fillRect(0, 0, W, H); }
+}
+
+/* =====================================================================
+   SAHNE DURUMU (zamana göre)
+   ===================================================================== */
+function update(t) {
+  camAt(t);
+  dust.uniforms.uT.value = t; dust.uniforms.uA.value = sm(0, 2, t) * (1 - sm(16.5, 18, t) * .7);
+  // beden ve kemikler
+  const bodyA = sm(.2, 1.8, t) * (1 - sm(16.3, 17.6, t) * .88);
+  skinU.uT.value = t; skinU.uA.value = bodyA;
+  boneMat.opacity = sm(.6, 2.4, t) * (1 - sm(16.3, 17.6, t) * .85) * (.55 + .45 * sm(3.5, 5.5, t) * (1 - sm(9, 12, t) * .5));
+  // ağrı: belirir, yakın planda yoğun; geri çekilince ağın bir parçasına dönüşür
+  const beat = .5 + .5 * Math.sin(t * 5.7);                // ~0.9 Hz nabız (müzikle eşleşik)
+  const painI = sm(.7, 1.8, t) * (1 - sm(11.2, 13.4, t) * .8) * (1 - sm(16.3, 17.2, t));
+  skinU.uPainI.value = painI; skinU.uPainR.value = .1 + .02 * beat;
+  painCore.material.opacity = painI * (.55 + .25 * beat) * (1 - sm(3.5, 6, t) * .5 + sm(8.5, 11, t) * .5);
+  painCore.scale.setScalar(.11 + .03 * beat - sm(3.5, 6, t) * .07 + sm(8.5, 11, t) * .05);
+  painHalo.material.opacity = painI * (.22 + .12 * beat) * (1 - sm(3.5, 6, t) * .8 + sm(8.5, 11, t) * .7);
+  painHalo.scale.setScalar(.4 - sm(3.5, 6, t) * .3 + sm(8.5, 11, t) * .28);
+  painLight.position.copy(PAIN).add(V(.03, .02, .06)); painLight.intensity = painI * (.25 + .15 * beat);
+  // ağrı rengi kırmızıdan "bilinmez" mavi-beyaza kayar
+  const hueShift = sm(11.5, 13.5, t);
+  painCore.material.color.setRGB(lerp(1, .75, hueShift), lerp(.16, .9, hueShift), lerp(.1, 1, hueShift));
+  rings.forEach((r, i) => {
+    const ph = ((t * .9 + i / 3) % 1);
+    r.material.opacity = painI * (1 - ph) * .55 * (1 - sm(3.5, 5, t) * .6);
+    r.scale.setScalar(.06 + ph * .28 * (1 - sm(3.5, 6, t) * .6));
+  });
+  // A grubu (omuz çevresi): yakın planda açılır
+  const t0A = 4.0, t0B = 8.6;
+  for (const L of lines) {
+    const u = L.m.uniforms; u.uT.value = t;
+    if (L.group === 'A') {
+      u.uRev.value = eio(inv(t0A + L.d, t0A + L.d + 1.9, t));
+      u.uA.value = sm(t0A + L.d, t0A + L.d + .3, t) * (1 - sm(10.5, 13, t) * .55) * (1 - sm(16.3, 17.4, t));
+      u.uPulse.value = sm(6, 7, t); u.uDir.value = 1;
+    } else {
+      u.uRev.value = eio(inv(t0B + L.d, t0B + L.d + 2.6, t));
+      u.uA.value = sm(t0B + L.d, t0B + L.d + .3, t) * (1 - sm(16.3, 17.4, t) * .85);
+      // önce omuzdan dışarı, sonra bedenin her yerinden omuza doğru sinyal akışı
+      u.uPulse.value = sm(10.5, 11.5, t); u.uDir.value = -1;
+    }
+  }
+  // olası kaynak noktaları
+  nodes.forEach(n => {
+    const a = sm(9.6 + n.userData.d * 2.2, 10.4 + n.userData.d * 2.2, t) * (1 - sm(16.3, 17.2, t));
+    const b = .55 + .45 * Math.sin(t * 3.1 + n.userData.ph);
+    n.material.opacity = a * b * .9; n.scale.setScalar(.06 + .03 * b);
+  });
+  // bütünlük dalgası (yakın plandan çıkışta merkezden yayılır)
+  skinU.uWaveC.value.copy(PAIN);
+  skinU.uWave.value = t > 8.4 && t < 12 ? (t - 8.4) * .55 : 0;
+  // marka anında ışıltı
+  bloom.strength = .6 + sm(4, 6, t) * .1 - sm(16.3, 17.5, t) * .2;
+}
+
+function renderAt(t) { update(t); composer.render(); overlay(t); }
+window.renderFrame = i => renderAt(i / FPS);
+window.renderAt = renderAt;
+
+/* ---------------- oynatma ---------------- */
+const params = new URLSearchParams(location.search);
+await document.fonts.load('300 64px "Inter Display"'); await document.fonts.load('200 64px "Inter Display"');
+renderAt(params.has('t') ? +params.get('t') : 0);
+window.READY = true;
+if (params.has('play')) {
+  const btn = document.getElementById('play'); btn.style.display = 'block';
+  btn.onclick = () => {
+    btn.remove();
+    const au = new Audio('output/muzik.wav'); au.play().catch(() => {});
+    const t0 = performance.now();
+    const loop = () => { const t = au.currentTime > 0 ? au.currentTime : (performance.now() - t0) / 1000; renderAt(Math.min(t, DUR)); if (t < DUR) requestAnimationFrame(loop); };
+    loop();
+  };
+}
+</script>
+</body>
+</html>
